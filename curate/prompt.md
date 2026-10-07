@@ -12,9 +12,9 @@ current directory, Read and WebSearch.
 
 1. **Read the taste profile.** Run `deck taste`. It prints about 50 kB of JSON; if the
    output is saved to a file, read the whole file before you choose anything.
-   - `lastfm.top_artists.overall` (200), `12month` (100) and `3month` (50): their most
-     played artists with play counts. The 3- and 12-month lists show where their taste is
-     right now.
+   - `lastfm.top_artists.overall` (200), `3year` (100) and `12month` (100): their most
+     played artists with play counts. The 3-year and 12-month lists show where their
+     taste is now; `overall` reaches much further back.
    - `lastfm.top_albums`: their most played albums of all time.
    - `shelf`: the albums they have collected by hand in Deck. These are the records they
      value most.

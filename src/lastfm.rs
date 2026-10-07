@@ -1,5 +1,5 @@
 //! Last.fm API (`ws.audioscrobbler.com/2.0`): the user's most played artists and
-//! albums per period, plus a cache of listened albums
+//! albums per period or since a given time, plus a cache of listened albums
 //! (`~/.cache/deck/lastfm-albums.json`, valid for a day).
 
 use std::{
@@ -24,12 +24,12 @@ const TEMPORARY_ERRORS: [u32; 4] = [8, 11, 16, 29];
 /// Page size for `user.getTopAlbums` when fetching listened albums.
 const PAGE_SIZE: u32 = 1000;
 
-/// A Last.fm time period.
+/// A Last.fm time period. Last.fm has none longer than a year besides `overall`:
+/// see [`LastFm::top_artists_since`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Period {
     Overall,
     TwelveMonths,
-    ThreeMonths,
 }
 
 impl Period {
@@ -37,7 +37,6 @@ impl Period {
         match self {
             Self::Overall => "overall",
             Self::TwelveMonths => "12month",
-            Self::ThreeMonths => "3month",
         }
     }
 }
@@ -73,18 +72,32 @@ impl LastFm {
     }
 
     pub async fn top_artists(&self, period: Period, limit: u32) -> Result<Vec<TopArtist>> {
-        let response: TopArtistsResponse = self.get("user.gettopartists", period, limit, 1).await?;
-        response
-            .topartists
-            .artist
-            .into_iter()
-            .map(|a| {
-                Ok(TopArtist {
-                    plays: plays(&a.playcount)?,
-                    name: a.name,
-                })
-            })
-            .collect()
+        let response: TopArtistsResponse = self
+            .get(
+                "user.gettopartists",
+                &[
+                    ("period", period.as_str().to_owned()),
+                    ("limit", limit.to_string()),
+                ],
+            )
+            .await?;
+        top_artists(response.topartists.artist)
+    }
+
+    /// The most played artists from `from` (Unix seconds) until now. Last.fm's
+    /// weekly artist chart accepts any time range and returns at most 1000 artists,
+    /// most played first.
+    pub async fn top_artists_since(&self, from: u64, limit: usize) -> Result<Vec<TopArtist>> {
+        let response: WeeklyArtistChartResponse = self
+            .get(
+                "user.getweeklyartistchart",
+                &[("from", from.to_string()), ("to", unix_now().to_string())],
+            )
+            .await?;
+        let mut artists = top_artists(response.weeklyartistchart.artist)?;
+        artists.sort_by_key(|a| std::cmp::Reverse(a.plays));
+        artists.truncate(limit);
+        Ok(artists)
     }
 
     pub async fn top_albums(&self, period: Period, limit: u32) -> Result<Vec<TopAlbum>> {
@@ -140,8 +153,16 @@ impl LastFm {
         limit: u32,
         page: u32,
     ) -> Result<(Vec<TopAlbum>, u32)> {
-        let response: TopAlbumsResponse =
-            self.get("user.gettopalbums", period, limit, page).await?;
+        let response: TopAlbumsResponse = self
+            .get(
+                "user.gettopalbums",
+                &[
+                    ("period", period.as_str().to_owned()),
+                    ("limit", limit.to_string()),
+                    ("page", page.to_string()),
+                ],
+            )
+            .await?;
         let total_pages = response
             .topalbums
             .attr
@@ -165,16 +186,10 @@ impl LastFm {
 
     /// Last.fm sometimes answers with a temporary error, so the call is tried
     /// at most [`ATTEMPTS`] times.
-    async fn get<T: DeserializeOwned>(
-        &self,
-        method: &str,
-        period: Period,
-        limit: u32,
-        page: u32,
-    ) -> Result<T> {
+    async fn get<T: DeserializeOwned>(&self, method: &str, params: &[(&str, String)]) -> Result<T> {
         let mut attempt = 1;
         loop {
-            match self.get_once(method, period, limit, page).await {
+            match self.get_once(method, params).await {
                 Err(Failure::Temporary(e)) if attempt < ATTEMPTS => {
                     log::warn!("Last.fm call {method} failed, retrying: {e:#}");
                     tokio::time::sleep(RETRY_DELAY * attempt).await;
@@ -189,24 +204,18 @@ impl LastFm {
     async fn get_once<T: DeserializeOwned>(
         &self,
         method: &str,
-        period: Period,
-        limit: u32,
-        page: u32,
+        params: &[(&str, String)],
     ) -> Result<T, Failure> {
-        let limit = limit.to_string();
-        let page = page.to_string();
         let response = self
             .http
             .get(API)
             .query(&[
                 ("method", method),
                 ("user", &self.user),
-                ("period", period.as_str()),
-                ("limit", &limit),
-                ("page", &page),
                 ("api_key", &self.key),
                 ("format", "json"),
             ])
+            .query(params)
             .send()
             .await
             .context("Last.fm is not responding")
@@ -242,6 +251,18 @@ impl LastFm {
 /// Default path of the cache.
 pub fn albums_cache_path() -> Result<PathBuf> {
     Ok(crate::config::cache_dir()?.join("lastfm-albums.json"))
+}
+
+fn top_artists(artists: Vec<ApiArtist>) -> Result<Vec<TopArtist>> {
+    artists
+        .into_iter()
+        .map(|a| {
+            Ok(TopArtist {
+                plays: plays(&a.playcount)?,
+                name: a.name,
+            })
+        })
+        .collect()
 }
 
 fn plays(playcount: &str) -> Result<u32> {
@@ -296,6 +317,18 @@ struct TopArtists {
 }
 
 #[derive(Deserialize)]
+struct WeeklyArtistChartResponse {
+    weeklyartistchart: WeeklyArtistChart,
+}
+
+#[derive(Deserialize)]
+struct WeeklyArtistChart {
+    /// Missing when nothing was played in the range.
+    #[serde(default)]
+    artist: Vec<ApiArtist>,
+}
+
+#[derive(Deserialize)]
 struct ApiArtist {
     name: String,
     playcount: String,
@@ -345,6 +378,22 @@ mod tests {
         assert_eq!(response.topalbums.attr.unwrap().total_pages, "14");
         assert_eq!(response.topalbums.album[0].artist.name, "Foo Fighters");
         assert_eq!(plays(&response.topalbums.album[0].playcount).unwrap(), 512);
+    }
+
+    #[test]
+    fn parses_weekly_artist_chart() {
+        let json = r#"{"weeklyartistchart":{"artist":[
+            {"mbid":"","url":"u","name":"Foo Fighters","@attr":{"rank":"1"},"playcount":"53"},
+            {"mbid":"","url":"u","name":"FM-84","@attr":{"rank":"2"},"playcount":"52"}],
+            "@attr":{"from":"1696702347","user":"example-user","to":"1791396747"}}}"#;
+        let response: WeeklyArtistChartResponse = serde_json::from_str(json).unwrap();
+        let artists = top_artists(response.weeklyartistchart.artist).unwrap();
+        assert_eq!(artists[1].name, "FM-84");
+        assert_eq!(artists[1].plays, 52);
+
+        let empty = r#"{"weeklyartistchart":{"@attr":{"from":"1","user":"u","to":"2"}}}"#;
+        let response: WeeklyArtistChartResponse = serde_json::from_str(empty).unwrap();
+        assert!(response.weeklyartistchart.artist.is_empty());
     }
 
     #[test]

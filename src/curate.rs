@@ -31,6 +31,8 @@ use crate::{
 pub const MAX_ALBUMS: usize = 20;
 /// This many plays on Last.fm make an album listened.
 pub const LISTENED_MIN_PLAYS: u32 = 3;
+/// The period of the `3year` artist list in `deck taste`, in seconds.
+const THREE_YEARS: u64 = 3 * 365 * 24 * 60 * 60;
 /// At most this many Spotify searches a day, across all `deck curate` runs.
 pub const SEARCH_BUDGET: usize = 30;
 /// A search stays in the cache for a day, and [`SEARCH_BUDGET`] counts the same period.
@@ -243,8 +245,10 @@ pub async fn taste() -> Result<()> {
             user: lastfm_user(config)?.to_owned(),
             top_artists: TopArtists {
                 overall: lastfm.top_artists(Period::Overall, 200).await?,
+                three_years: lastfm
+                    .top_artists_since(unix_now().saturating_sub(THREE_YEARS), 100)
+                    .await?,
                 twelve_months: lastfm.top_artists(Period::TwelveMonths, 100).await?,
-                three_months: lastfm.top_artists(Period::ThreeMonths, 50).await?,
             },
             top_albums: lastfm.top_albums(Period::Overall, 200).await?,
         },
@@ -587,10 +591,10 @@ struct LastFmTaste {
 #[derive(Serialize)]
 struct TopArtists {
     overall: Vec<TopArtist>,
+    #[serde(rename = "3year")]
+    three_years: Vec<TopArtist>,
     #[serde(rename = "12month")]
     twelve_months: Vec<TopArtist>,
-    #[serde(rename = "3month")]
-    three_months: Vec<TopArtist>,
 }
 
 #[derive(Serialize)]

@@ -57,8 +57,8 @@ when you open the album.
 
 The list is based on:
 
-- your **Last.fm listening history** (most played artists of all time and of the last 12
-  and 3 months, and most played albums),
+- your **Last.fm listening history** (most played artists of all time and of the last 3
+  years and 12 months, and most played albums),
 - your **shelf** (the records you value most),
 - **earlier lists**: what was suggested before, what you put on your shelf and what you
   dismissed.

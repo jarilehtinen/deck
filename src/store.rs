@@ -2,7 +2,7 @@
 //!
 //! Saving first writes a temporary file next to the target and renames it over the
 //! target, so a crash never leaves half a file. The temporary file name is unique per
-//! process and call (`.<name>.<pid>.<n>.tmp`), so Deck and a `deck curate` running at
+//! process and call (`.<name>.<pid>.<n>.tmp`), so Deck and a `deck curate submit` running at
 //! the same time never write to the same temporary file.
 
 use std::{

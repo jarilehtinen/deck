@@ -35,7 +35,7 @@ pub struct Config {
     /// Client ID of your own Spotify app for Web API calls. Without it the
     /// librespot session token is used, which Spotify rate-limits (429).
     pub client_id: Option<String>,
-    /// Last.fm API key for curation (`deck taste`, `deck curate`).
+    /// Last.fm API key for curation (`deck taste`, `deck curate submit`).
     pub lastfm_api_key: Option<String>,
     /// Last.fm user whose listening history is the taste data for curation. Required,
     /// like `lastfm_api_key`, whenever Last.fm is needed.
@@ -114,7 +114,7 @@ pub fn state_dir() -> Result<PathBuf> {
     Ok(home()?.join(".local/state/deck"))
 }
 
-fn home() -> Result<PathBuf> {
+pub fn home() -> Result<PathBuf> {
     let base = directories::BaseDirs::new().ok_or_else(|| anyhow!("home directory not found"))?;
     Ok(base.home_dir().to_owned())
 }

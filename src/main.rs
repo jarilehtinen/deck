@@ -2,6 +2,7 @@ mod app;
 mod catalog;
 mod config;
 mod curate;
+mod curate_run;
 mod genre_cli;
 mod genres;
 mod lastfm;
@@ -46,8 +47,9 @@ use crate::{
 /// the elapsed time and the progress bar.
 const TICK: Duration = Duration::from_millis(100);
 
-const USAGE: &str = "usage: deck [taste | curate [--dry-run] | genre add [--dry-run] \
-                     | genre remove <name> | genre list | genre prompt | --help | --version]";
+const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
+                     | genre add [--dry-run] | genre remove <name> | genre list | genre prompt \
+                     | --help | --version]";
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -55,7 +57,10 @@ enum Mode {
     /// Plain `deck`: the player and the UI.
     Deck,
     Taste,
-    Curate {
+    /// The Curated run (`curate_run`).
+    Curate,
+    /// What the run's Claude calls: checks candidates and writes the list (`curate`).
+    CurateSubmit {
         dry_run: bool,
     },
     Genre(GenreCommand),
@@ -86,8 +91,9 @@ impl Mode {
         match args.as_slice() {
             [] => Ok(Self::Deck),
             ["taste"] => Ok(Self::Taste),
-            ["curate"] => Ok(Self::Curate { dry_run: false }),
-            ["curate", "--dry-run"] => Ok(Self::Curate { dry_run: true }),
+            ["curate"] => Ok(Self::Curate),
+            ["curate", "submit"] => Ok(Self::CurateSubmit { dry_run: false }),
+            ["curate", "submit", "--dry-run"] => Ok(Self::CurateSubmit { dry_run: true }),
             ["genre", "add"] => Ok(Self::Genre(GenreCommand::Add { dry_run: false })),
             ["genre", "add", "--dry-run"] => Ok(Self::Genre(GenreCommand::Add { dry_run: true })),
             ["genre", "remove", name @ ..] if !name.is_empty() => {
@@ -167,9 +173,13 @@ async fn run_mode(mode: Mode) -> Result<()> {
             init_stderr_logging();
             curate::taste().await
         }
-        Mode::Curate { dry_run } => {
+        Mode::Curate => {
             init_stderr_logging();
-            curate::curate(dry_run).await
+            curate_run::run()
+        }
+        Mode::CurateSubmit { dry_run } => {
+            init_stderr_logging();
+            curate::submit(dry_run).await
         }
         Mode::Genre(command) => {
             init_stderr_logging();
@@ -799,13 +809,18 @@ mod tests {
     fn modes_from_arguments() {
         assert_eq!(mode(&[]), Some(Mode::Deck));
         assert_eq!(mode(&["taste"]), Some(Mode::Taste));
-        assert_eq!(mode(&["curate"]), Some(Mode::Curate { dry_run: false }));
+        assert_eq!(mode(&["curate"]), Some(Mode::Curate));
         assert_eq!(mode(&["now-playing"]), Some(Mode::NowPlaying));
         assert_eq!(
-            mode(&["curate", "--dry-run"]),
-            Some(Mode::Curate { dry_run: true })
+            mode(&["curate", "submit"]),
+            Some(Mode::CurateSubmit { dry_run: false })
         );
-        assert_eq!(mode(&["curate", "--wet"]), None);
+        assert_eq!(
+            mode(&["curate", "submit", "--dry-run"]),
+            Some(Mode::CurateSubmit { dry_run: true })
+        );
+        assert_eq!(mode(&["curate", "--dry-run"]), None);
+        assert_eq!(mode(&["curate", "submit", "--wet"]), None);
         assert_eq!(mode(&["taste", "--dry-run"]), None);
         assert_eq!(mode(&["play"]), None);
         assert_eq!(

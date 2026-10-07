@@ -35,7 +35,8 @@ All four must pass before a commit.
 - **`main`**: the event loop and all IO. It reads keys and player events, calls
   `State::update`, carries out each `Action` (often in a tokio task that sends the result
   back as an `Event`) and draws. It also parses the subcommands (`deck taste`,
-  `deck curate`, `deck genre …`, and the internal `deck now-playing`).
+  `deck curate`, `deck curate submit`, `deck genre …`, and the internal
+  `deck now-playing`).
 - **`ui`**: draws the state with ratatui. No logic: decisions belong in `app`. The key
   help rows are in `key_help`.
 
@@ -50,7 +51,8 @@ Other modules:
 | `genre_cli` | `deck genre add / remove / list / prompt` |
 | `shelf` | The album shelf (`~/.config/deck/shelf.json`) |
 | `lists` | The Curated list and its history |
-| `curate` | `deck taste` and `deck curate`, used by the weekly Curated run |
+| `curate` | `deck taste` and `deck curate submit`, used by the weekly Curated run |
+| `curate_run` | `deck curate`: the Curated run, which starts Claude Code with `curate/prompt.md` and logs to `~/.cache/deck/curate.log` |
 | `lastfm` | Last.fm API |
 | `playback` | Playback state across restarts (`~/.local/state/deck/playback.json`) |
 | `now_playing` | macOS Now Playing and media keys, run in a helper process |
@@ -58,9 +60,11 @@ Other modules:
 | `rate_limit` | Spotify's 429 block shared by all Deck processes (`~/.cache/deck/rate-limit.json`) |
 | `store` | Atomic JSON read and write shared by the modules that keep files |
 
-Curated is built outside the app: `scripts/curate.sh` runs Claude Code with
-`curate/prompt.md`, and Claude calls `deck taste` and `deck curate`. `genres/prompt.md` is
-the corresponding prompt for adding genres, printed by `deck genre prompt`.
+Curated is built outside the app: `deck curate` runs Claude Code with `curate/prompt.md`
+(compiled in), and Claude calls `deck taste` and `deck curate submit`.
+`scripts/install-curate.sh` installs a launchd job that runs `deck curate` every Monday.
+`genres/prompt.md` is the corresponding prompt for adding genres, printed by
+`deck genre prompt`.
 
 ## Conventions
 
@@ -70,7 +74,7 @@ the corresponding prompt for adding genres, printed by `deck genre prompt`.
 - **Code, comments and doc comments are in English**, like everything else in the repo.
 - **Save files atomically** with `store::save_json` (or `store::write_atomic`): it writes a
   uniquely named temp file next to the target and renames it over the target, so a crash
-  never leaves half a file and two processes (Deck and `deck curate`) never clash.
+  never leaves half a file and two processes (Deck and `deck curate submit`) never clash.
 - **Never overwrite a broken file.** If a user file (shelf, genres, Curated…) cannot be
   parsed, show the error and leave the file alone, so the user can fix it by hand. A
   missing file is not an error: it means empty. `store::read_json` does both. Deck's own

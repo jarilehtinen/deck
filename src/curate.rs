@@ -1,5 +1,6 @@
-//! The subcommands `deck taste` and `deck curate`, with which the curation run (Claude)
-//! reads the taste profile and offers its candidates for the Curated list.
+//! The subcommands `deck taste` and `deck curate submit`, with which the curation run
+//! (Claude, started by `curate_run`) reads the taste profile and offers its candidates
+//! for the Curated list.
 //!
 //! The check rules are a pure function, [`check`]: the candidates, their Spotify hits,
 //! the shelf, the history and Last.fm's listened albums → a report and the list's albums.
@@ -33,7 +34,7 @@ pub const MAX_ALBUMS: usize = 20;
 pub const LISTENED_MIN_PLAYS: u32 = 3;
 /// The period of the `3year` artist list in `deck taste`, in seconds.
 const THREE_YEARS: u64 = 3 * 365 * 24 * 60 * 60;
-/// At most this many Spotify searches a day, across all `deck curate` runs.
+/// At most this many Spotify searches a day, across all `deck curate submit` runs.
 pub const SEARCH_BUDGET: usize = 30;
 /// A search stays in the cache for a day, and [`SEARCH_BUDGET`] counts the same period.
 const SEARCH_MAX_AGE: u64 = 24 * 60 * 60;
@@ -86,7 +87,7 @@ pub struct Rejected {
     pub uri: Option<String>,
 }
 
-/// Output of `deck curate`.
+/// Output of `deck curate submit`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Report {
     /// The albums taken onto the list, in suggestion order, at most [`MAX_ALBUMS`].
@@ -277,9 +278,9 @@ pub async fn taste() -> Result<()> {
     Ok(())
 }
 
-/// `deck curate [--dry-run]`: reads the candidates from stdin, prints a report and
+/// `deck curate submit [--dry-run]`: reads the candidates from stdin, prints a report and
 /// (without `--dry-run`) publishes the list. Zero accepted without `--dry-run` is an error.
-pub async fn curate(dry_run: bool) -> Result<()> {
+pub async fn submit(dry_run: bool) -> Result<()> {
     let config = &Config::load()?;
     let mut input = String::new();
     std::io::stdin()
@@ -527,7 +528,7 @@ impl SearchCache {
     }
 }
 
-/// Error message for a block. The curation run (curate.sh) logs it to `curate.log`.
+/// Error message for a block. The curation run (`deck curate`) logs it to `curate.log`.
 fn blocked_message(until: u64, retry_after: u64) -> String {
     let until = i64::try_from(until)
         .ok()

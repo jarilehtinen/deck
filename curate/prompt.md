@@ -5,8 +5,8 @@ albums they have not heard yet, each with a short reason. You pick the records a
 checks them against Spotify, their shelf, earlier rounds and Last.fm.
 
 The run is unattended. Nobody answers questions, so make every call yourself and finish
-the job. Your tools are `deck taste`, `deck curate`, Write for the candidate files in the
-current directory, Read and WebSearch.
+the job. Your tools are `deck taste`, `deck curate submit`, Write for the candidate files
+in the current directory, Read and WebSearch.
 
 ## Steps
 
@@ -29,7 +29,7 @@ current directory, Read and WebSearch.
    marketing words, and do not start every reason the same way.
 
 3. **Check them with a dry run.** Write the list with the Write tool as a JSON file in
-   the current directory, then pass the file to `deck curate` on stdin:
+   the current directory, then pass the file to `deck curate submit` on stdin:
 
    ```json
    [
@@ -39,7 +39,7 @@ current directory, Read and WebSearch.
    ```
 
    ```sh
-   deck curate --dry-run < round-1.json
+   deck curate submit --dry-run < round-1.json
    ```
 
    Use a new file for every round (`round-1.json`, `round-2.json`, …): existing files
@@ -63,24 +63,25 @@ current directory, Read and WebSearch.
      earlier one is dropped, they move up.
    - `missing`: 20 minus the number accepted.
    - `searched` and `searches_left`: Spotify blocks Deck for hours if it searches too
-     much, so `deck curate` makes at most 30 searches a day. The limit is shared with
-     `deck genre add`, so `searches_left` may be below 30 before your first dry run. A
-     candidate already checked in this run costs nothing, and neither does one on the
-     shelf, in the history or listened. Every new candidate costs one search.
+     much, so `deck curate submit` makes at most 30 searches a day. The limit is shared
+     with `deck genre add`, so `searches_left` may be below 30 before your first dry
+     run. A candidate already checked in this run costs nothing, and neither does one on
+     the shelf, in the history or listened. Every new candidate costs one search.
 
    Replace the rejected ones with new candidates and run the dry run again until
    `missing` is 0. Keep the candidates you already have exactly as they were, and add
    no more new ones than you need. Do at most three dry runs.
 
-   If `deck curate` fails with "Spotify is rate limiting Deck", stop at once: do not
-   run `deck curate` again in this run, not even to write the list. Finish with the
-   summary and say that the list was not written because of the rate limit.
+   If `deck curate submit` fails with "Spotify is rate limiting Deck", stop at once: do
+   not run `deck curate submit` again in this run, not even to write the list. Finish
+   with the summary and say that the list was not written because of the rate limit.
 
-4. **Write the list.** Run `deck curate` without `--dry-run` with the final candidate list,
-   for example `deck curate < round-3.json` (or write it to `final.json` first if you
-   changed it after the last dry run). It replaces the current list and adds the
-   accepted albums to the history. If `missing` is still above 0 after three dry runs
-   or `searches_left` is 0, write the list anyway: a shorter list is better than none.
+4. **Write the list.** Run `deck curate submit` without `--dry-run` with the final
+   candidate list, for example `deck curate submit < round-3.json` (or write it to
+   `final.json` first if you changed it after the last dry run). It replaces the current
+   list and adds the accepted albums to the history. If `missing` is still above 0 after
+   three dry runs or `searches_left` is 0, write the list anyway: a shorter list is
+   better than none.
 
 5. **Finish** with a short summary in plain text: how many albums were written, how many
    dry runs it took, the rough mix (new artists vs. unheard records by familiar ones,

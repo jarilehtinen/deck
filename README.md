@@ -168,8 +168,9 @@ which the Rust installer added to your `PATH`.
 `Cargo.lock`. Deck's Spotify library (librespot 0.8) does not build with some newer
 versions of its own dependencies, so without `--locked` the build can fail.
 
-Keep the `deck` folder: Curated runs its scripts from there. To update Deck later, run
-`git pull` and the same `cargo install` command in it. `deck --help` lists the commands
+Keep the `deck` folder: Curated's weekly job is installed from there. To update Deck
+later, run `git pull` and the same `cargo install` command in it. `deck --help` lists the
+commands
 and `deck --version` shows the installed version.
 
 ## First start
@@ -318,10 +319,8 @@ Curated is put together once a week by Claude Code. You need:
 - **[Claude Code](https://claude.com/claude-code)**, installed and signed in, so that the
   `claude` command works in the terminal. Each weekly run uses your Claude plan or API
   credits like any other Claude Code session.
-- **`jq`:** included in macOS 15 and later. On older systems: `brew install jq`.
-
-`deck`, `claude` and `jq` must all be found in your terminal's `PATH` (check with
-`command -v deck claude jq`).
+`deck` and `claude` must both be found in your terminal's `PATH` (check with
+`command -v deck claude`).
 
 ### 1. Add Last.fm to the config file
 
@@ -343,14 +342,15 @@ If something is missing, the error tells you what to add.
 ### 2. Make the first list
 
 Run Deck at least once before this (the sign-ins from [First start](#first-start)), then
-run in the `deck` folder:
+run:
 
 ```sh
-scripts/curate.sh
+deck curate
 ```
 
 It takes a few minutes. The progress is written to the terminal and to
-`~/.cache/deck/curate.log`. When it is done, `✦ Curated` appears on Deck's home view.
+`~/.cache/deck/curate.log`. You can run it again any time to replace the list with a new
+one. When it is done, `✦ Curated` appears on Deck's home view.
 
 ### 3. Make it run every week
 
@@ -358,15 +358,14 @@ It takes a few minutes. The progress is written to the terminal and to
 scripts/install-curate.sh
 ```
 
-This installs a background job (a launchd agent) that makes a new list every Monday at
-9:00. If your Mac is asleep at that time, the list is made when it wakes up; if it is
-shut down, that week is skipped. Background jobs do not get your terminal's `PATH`, so
-the installer looks up where `deck`, `claude` and `jq` are and writes those folders into
-the job; it stops with an error if one of them is missing. The job runs the scripts from
-the `deck` folder, so run `scripts/install-curate.sh` again if you move the folder or if
-`deck`, `claude` or `jq` moves (for example after reinstalling Claude Code another way).
-If the job cannot find one of them, `~/.cache/deck/curate.log` says `error: … not
-found`. To remove the job:
+Run this in the `deck` folder. It installs a background job (a launchd agent) that runs
+`deck curate` every Monday at 9:00. If your Mac is asleep at that time, the list is made
+when it wakes up; if it is shut down, that week is skipped. Background jobs do not get
+your terminal's `PATH`, so the installer looks up where `deck` and `claude` are and
+writes those folders into the job; it stops with an error if one of them is missing. Run
+`scripts/install-curate.sh` again if `deck` or `claude` moves (for example after
+reinstalling Claude Code another way). If the job cannot find `claude`,
+`~/.cache/deck/curate.log` says `claude not found`. To remove the job:
 
 ```sh
 scripts/install-curate.sh --uninstall
@@ -374,24 +373,25 @@ scripts/install-curate.sh --uninstall
 
 ### How Curated works
 
-`scripts/curate.sh` runs Claude Code with the instructions in `curate/prompt.md`. Claude
-can only run two Deck commands, write candidate files in `~/.cache/deck/curate/` and
-search the web:
+`deck curate` runs Claude Code with the instructions in `curate/prompt.md` (built into
+Deck). Claude can only run two Deck commands, write candidate files in
+`~/.cache/deck/curate/` and search the web:
 
 - `deck taste` prints your taste profile: Last.fm history, shelf and earlier lists.
-- `deck curate [--dry-run]` reads album candidates with reasons, finds them on Spotify and
-  reports which ones are accepted and why others are not (not on Spotify, on your shelf,
-  suggested before, already listened to). Without `--dry-run` it saves the list.
+- `deck curate submit [--dry-run]` reads album candidates with reasons, finds them on
+  Spotify and reports which ones are accepted and why others are not (not on Spotify, on
+  your shelf, suggested before, already listened to). Without `--dry-run` it saves the
+  list.
 
 Claude picks about 24 candidates, checks them, replaces the rejected ones and saves the
 best 20. If the run fails, the previous list stays.
 
 Spotify blocks apps that make too many Web API requests for many hours, which would also
-stop Deck's search. So `deck curate` is careful: it makes at most **30 Spotify searches a
-day**, remembers searches for a day, and stops at once when Spotify says "too many
-requests" (429), making no more searches until the block has passed. The 30 searches are
-shared with `deck genre add`, and the block with Deck itself: whichever of them meets it
-first, the others wait too.
+stop Deck's search. So `deck curate submit` is careful: it makes at most **30 Spotify
+searches a day**, remembers searches for a day, and stops at once when Spotify says "too
+many requests" (429), making no more searches until the block has passed. The 30
+searches are shared with `deck genre add`, and the block with Deck itself: whichever of
+them meets it first, the others wait too.
 
 ## Files
 
@@ -404,8 +404,8 @@ first, the others wait too.
 | `~/.config/deck/curated.json` | This week's Curated list |
 | `~/.config/deck/curated-history.json` | Everything Curated has suggested |
 | `~/.cache/deck/` | Sign-ins (`credentials.json`, `webapi.json`), Deck's log `deck.log` (the previous run's log is `deck.log.1`), Curated's log `curate.log` and the caches below |
-| `~/.cache/deck/curate-searches.json` | Spotify searches of the last day by `deck curate` and `deck genre add`, and the daily search count |
-| `~/.cache/deck/rate-limit.json` | A possible 429 block from Spotify, shared by Deck, `deck curate` and `deck genre add` |
+| `~/.cache/deck/curate-searches.json` | Spotify searches of the last day by `deck curate submit` and `deck genre add`, and the daily search count |
+| `~/.cache/deck/rate-limit.json` | A possible 429 block from Spotify, shared by Deck, `deck curate submit` and `deck genre add` |
 | `~/.cache/deck/lastfm-albums.json` | Albums you have listened to on Last.fm, fetched again after a day |
 | `~/.cache/deck/curate/` | The weekly Curated run's working folder: Claude's candidate files from the latest run |
 | `~/.local/state/deck/playback.json` | What was playing when you quit |

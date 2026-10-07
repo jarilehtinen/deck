@@ -1,7 +1,7 @@
 //! Album lists alongside the shelf: Curated (`~/.config/deck/curated.json`) and its
 //! history (`~/.config/deck/curated-history.json`).
 //!
-//! `deck curate` writes the whole list and adds the suggestions to the history. Deck
+//! `deck curate submit` writes the whole list and adds the suggestions to the history. Deck
 //! removes a rejected album from the list and marks the rejection in the history
 //! ([`CuratedFiles::reject`]). The files are saved atomically ([`crate::store`]) like the
 //! shelf, and a broken file is never overwritten: loading returns an error and nothing

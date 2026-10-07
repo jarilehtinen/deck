@@ -1,21 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Deck's curate run (Curated) on Mondays at 9:00. Install: scripts/install-curate.sh,
-     which replaces the REPO and HOME placeholders with paths and the PATH placeholder
-     with the directories where deck, claude and jq were found at install time
-     (launchd's own PATH is narrow). The placeholders are only below, not in this
-     comment. If the Mac is asleep at 9:00, launchd runs this when it wakes. If it is
-     shut down, the round is skipped.
-     Log: ~/.cache/deck/curate.log (curate.sh writes it itself; only a crash of the
-     script itself ends up here). -->
+     which replaces the DECK placeholder with the path of deck, HOME with the home
+     directory and PATH with the directories where deck and claude were found at
+     install time (launchd's own PATH is narrow). The placeholders are only below, not
+     in this comment. If the Mac is asleep at 9:00, launchd runs this when it wakes. If
+     it is shut down, the round is skipped.
+     Log: ~/.cache/deck/curate.log (deck curate writes it itself; only errors that stop
+     deck curate before it can open its log end up here). -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
   <string>io.github.jarilehtinen.deck-curate</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>@REPO@/scripts/curate.sh</string>
+    <string>@DECK@</string>
+    <string>curate</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

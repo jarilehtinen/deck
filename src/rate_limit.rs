@@ -1,7 +1,7 @@
 //! Spotify's 429 block shared by all Deck processes (`~/.cache/deck/rate-limit.json`).
 //!
 //! After too many Web API requests Spotify blocks all of the app's requests for hours.
-//! Deck, `deck curate` and `deck genre add` use the same app, so a block that one of
+//! Deck, `deck curate submit` and `deck genre add` use the same app, so a block that one of
 //! them meets holds for the others too: [`crate::catalog::Catalog`] checks the file
 //! before every request and records a 429 in it, and the subcommands check it before
 //! their first search. The block is kept in memory as well, so it holds even if the

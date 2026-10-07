@@ -1,7 +1,7 @@
 #!/bin/bash
-# Installs the curate run as a launchd agent (Mondays at 9:00) and loads it.
-# Run it again if the repo moves, deck, claude or jq moves to another directory,
-# or the plist changes. Removal: --uninstall.
+# Installs the curate run (deck curate) as a launchd agent (Mondays at 9:00) and loads
+# it. Run it again if deck or claude moves to another directory, or the plist changes.
+# Removal: --uninstall.
 set -euo pipefail
 
 LABEL="io.github.jarilehtinen.deck-curate"
@@ -22,7 +22,7 @@ fi
 # launchd's PATH is narrow, so the job's PATH is built from the directories where the
 # commands are found now, and written into the plist.
 JOB_PATH=""
-for cmd in deck claude jq; do
+for cmd in deck claude; do
     found="$(command -v "$cmd" || true)"
     case "$found" in
         /*) ;;
@@ -53,7 +53,7 @@ escape() {
 }
 
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
-sed -e "s|@REPO@|$(escape "$REPO")|g" \
+sed -e "s|@DECK@|$(escape "$(command -v deck)")|g" \
     -e "s|@HOME@|$(escape "$HOME")|g" \
     -e "s|@PATH@|$(escape "$JOB_PATH")|g" \
     "$SRC" > "$DEST"

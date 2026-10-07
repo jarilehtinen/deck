@@ -3,7 +3,7 @@
 //! The token comes from an OAuth sign-in to the user's own Spotify app when
 //! `config.toml` gives a `client_id`. Otherwise the librespot session token (login5)
 //! is used, which Spotify rate limits because of the shared client ID (429).
-//! Subcommands (`deck curate`) sign in without a session, using only the saved token
+//! Subcommands (`deck curate submit`) sign in without a session, using only the saved token
 //! ([`Catalog::connect_stored`]).
 //!
 //! Likes go through `/me/library` (the old `/me/tracks` has been shut down), and they
@@ -485,7 +485,7 @@ impl<T: Clone> Memo<T> {
 }
 
 /// The Web API answered 429: Spotify blocks all of the app's requests for `retry-after`
-/// seconds. A separate type so that `deck curate` can recognise it (`downcast_ref`).
+/// seconds. A separate type so that `deck curate submit` can recognise it (`downcast_ref`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimited {
     /// The `retry-after` header in seconds, if Spotify gave one.

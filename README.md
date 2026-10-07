@@ -387,9 +387,9 @@ Claude picks about 24 candidates, checks them, replaces the rejected ones and sa
 best 20. If the run fails, the previous list stays.
 
 Spotify blocks apps that make too many Web API requests for many hours, which would also
-stop Deck's search. So `deck curate submit` is careful: it makes at most **30 Spotify
+stop Deck's search. So `deck curate submit` is careful: it makes at most **50 Spotify
 searches a day**, remembers searches for a day, and stops at once when Spotify says "too
-many requests" (429), making no more searches until the block has passed. The 30
+many requests" (429), making no more searches until the block has passed. The 50
 searches are shared with `deck genre add`, and the block with Deck itself: whichever of
 them meets it first, the others wait too.
 

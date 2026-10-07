@@ -63,8 +63,8 @@ in the current directory, Read and WebSearch.
      earlier one is dropped, they move up.
    - `missing`: 20 minus the number accepted.
    - `searched` and `searches_left`: Spotify blocks Deck for hours if it searches too
-     much, so `deck curate submit` makes at most 30 searches a day. The limit is shared
-     with `deck genre add`, so `searches_left` may be below 30 before your first dry
+     much, so `deck curate submit` makes at most 50 searches a day. The limit is shared
+     with `deck genre add`, so `searches_left` may be below 50 before your first dry
      run. A candidate already checked in this run costs nothing, and neither does one on
      the shelf, in the history or listened. Every new candidate costs one search.
 

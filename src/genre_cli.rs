@@ -849,7 +849,7 @@ mod tests {
         );
         assert_eq!(checked.seeds[0].uri, LOVE);
         assert_eq!(checked.searched, 3);
-        assert_eq!(cache.searches_left(), 27);
+        assert_eq!(cache.searches_left(), crate::curate::SEARCH_BUDGET - 3);
 
         // A new round does not search the same names again.
         let again = run(&[seed("Love", None, None)], &mut cache, &mut spotify).await;

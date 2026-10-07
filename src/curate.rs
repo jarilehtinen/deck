@@ -35,7 +35,9 @@ pub const LISTENED_MIN_PLAYS: u32 = 3;
 /// The period of the `3year` artist list in `deck taste`, in seconds.
 const THREE_YEARS: u64 = 3 * 365 * 24 * 60 * 60;
 /// At most this many Spotify searches a day, across all `deck curate submit` runs.
-pub const SEARCH_BUDGET: usize = 30;
+/// Spotify does not say where its limit is: 109 searches in four minutes once passed,
+/// but some 40 more the next morning brought a 429 with a block of almost ten hours.
+pub const SEARCH_BUDGET: usize = 50;
 /// A search stays in the cache for a day, and [`SEARCH_BUDGET`] counts the same period.
 const SEARCH_MAX_AGE: u64 = 24 * 60 * 60;
 /// Pause between Spotify searches.

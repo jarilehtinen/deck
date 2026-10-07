@@ -28,7 +28,7 @@ and web search.
    so a wrong link is rejected, not saved.
 
    A seed without `uri` is looked up by name in the Spotify Web API. Spotify blocks the
-   user's Deck for hours after too many searches, so Deck allows only 30 searches a day,
+   user's Deck for hours after too many searches, so Deck allows only 50 searches a day,
    shared with other Deck commands. Give a URI whenever you can.
 
 4. **Check them with a dry run.** Write the genre as a JSON file and pass it to

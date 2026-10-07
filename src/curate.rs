@@ -40,6 +40,9 @@ const THREE_YEARS: u64 = 3 * 365 * 24 * 60 * 60;
 pub const SEARCH_BUDGET: usize = 50;
 /// A search stays in the cache for a day, and [`SEARCH_BUDGET`] counts the same period.
 const SEARCH_MAX_AGE: u64 = 24 * 60 * 60;
+/// An album not found on Spotify is not searched again for half a year: Spotify's
+/// catalog changes, but seldom.
+const NOT_FOUND_MAX_AGE: u64 = 182 * 24 * 60 * 60;
 /// Pause between Spotify searches.
 pub const SEARCH_PAUSE: Duration = Duration::from_millis(500);
 /// Length of the block if the 429 response has no `retry-after`.
@@ -254,7 +257,18 @@ pub async fn taste() -> Result<()> {
                 twelve_months: lastfm.top_artists(Period::TwelveMonths, 100).await?,
             },
             top_albums: lastfm.top_albums(Period::Overall, 200).await?,
+            listened: lastfm
+                .listened_albums(&lastfm::albums_cache_path()?, LISTENED_MIN_PLAYS)
+                .await?
+                .iter()
+                .map(|a| format!("{} – {}", a.artist, a.album))
+                .collect(),
         },
+        not_on_spotify: SearchCache::load(&SearchCache::default_path()?, unix_now())
+            .not_found
+            .iter()
+            .map(|n| format!("{} – {}", n.artist, n.album))
+            .collect(),
         shelf: shelf
             .iter()
             .map(|a| ShelfAlbum {
@@ -329,6 +343,17 @@ pub async fn submit(dry_run: bool) -> Result<()> {
     let (hits, searched) = looked_up?;
 
     let (mut report, albums) = check(&candidates, &hits, &shelf, &history, &listened);
+    let not_found: Vec<&Rejected> = report
+        .rejected
+        .iter()
+        .filter(|r| r.reason == Rejection::NotFound)
+        .collect();
+    if !not_found.is_empty() {
+        for r in not_found {
+            cache.remember_not_found(&r.artist, &r.album, unix_now());
+        }
+        cache.save(&cache_path)?;
+    }
     report.searched = searched;
     report.searches_left = cache.searches_left();
     println!("{}", serde_json::to_string_pretty(&report)?);
@@ -423,6 +448,17 @@ pub struct SearchCache {
     /// Seed searches of `deck genre add`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     seed_searches: Vec<CachedSeedSearch>,
+    /// Candidates that were not found on Spotify, kept for [`NOT_FOUND_MAX_AGE`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    not_found: Vec<NotFound>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NotFound {
+    artist: String,
+    album: String,
+    /// Search time in Unix seconds.
+    checked: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -475,6 +511,8 @@ impl SearchCache {
             .retain(|s| now.saturating_sub(s.fetched) < SEARCH_MAX_AGE);
         self.seed_searches
             .retain(|s| now.saturating_sub(s.fetched) < SEARCH_MAX_AGE);
+        self.not_found
+            .retain(|n| now.saturating_sub(n.checked) < NOT_FOUND_MAX_AGE);
     }
 
     /// An error if Spotify has blocked searches, in this or another Deck process.
@@ -487,13 +525,33 @@ impl SearchCache {
 
     /// An earlier search for the same artist and album. Names are compared normalised
     /// ([`normalize`]), because [`pick`] compares the hits the same way:
-    /// "No Other (Remastered)" uses the search for "No Other".
+    /// "No Other (Remastered)" uses the search for "No Other". An album remembered as
+    /// not found has no hits.
     fn get(&self, artist: &str, album: &str) -> Option<&[FoundAlbum]> {
         let (artist, album) = (normalize(artist), normalize(album));
+        let same = |a: &str, b: &str| normalize(a) == artist && normalize(b) == album;
         self.searches
             .iter()
-            .find(|s| normalize(&s.artist) == artist && normalize(&s.album) == album)
+            .find(|s| same(&s.artist, &s.album))
             .map(|s| s.hits.as_slice())
+            .or_else(|| {
+                self.not_found
+                    .iter()
+                    .any(|n| same(&n.artist, &n.album))
+                    .then_some(&[][..])
+            })
+    }
+
+    /// Remembers that the album was not found, so that it is not searched again.
+    fn remember_not_found(&mut self, artist: &str, album: &str, now: u64) {
+        let (key_artist, key_album) = (normalize(artist), normalize(album));
+        self.not_found
+            .retain(|n| normalize(&n.artist) != key_artist || normalize(&n.album) != key_album);
+        self.not_found.push(NotFound {
+            artist: artist.to_owned(),
+            album: album.to_owned(),
+            checked: now,
+        });
     }
 
     pub fn searches_left(&self) -> usize {
@@ -579,6 +637,8 @@ fn load_shelf() -> Result<Vec<Album>> {
 #[derive(Serialize)]
 struct Taste {
     lastfm: LastFmTaste,
+    /// Candidates of earlier runs that were not found on Spotify ("Artist – Album").
+    not_on_spotify: Vec<String>,
     shelf: Vec<ShelfAlbum>,
     history: Vec<PastSuggestion>,
 }
@@ -589,6 +649,9 @@ struct LastFmTaste {
     top_artists: TopArtists,
     /// The most played albums of all time.
     top_albums: Vec<TopAlbum>,
+    /// Every album with at least [`LISTENED_MIN_PLAYS`] plays ("Artist – Album"):
+    /// `deck curate submit` rejects these.
+    listened: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1038,6 +1101,40 @@ mod tests {
             reasons(&report)[SEARCH_BUDGET..],
             [Rejection::NotChecked, Rejection::NotChecked]
         );
+    }
+
+    #[tokio::test]
+    async fn not_found_is_remembered_for_half_a_year() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("curate-searches.json");
+        let mut cache = SearchCache::default();
+        cache.remember_not_found("Hum", "You'd Prefer an Astronaut", NOW);
+        cache.remember_not_found("Hum", "You'd Prefer An Astronaut", NOW + 60);
+        assert_eq!(cache.not_found.len(), 1);
+        cache.save(&path).unwrap();
+
+        // A week later it is not searched, costs nothing and is rejected as not found.
+        let mut cache = SearchCache::load(&path, NOW + 7 * 24 * 60 * 60);
+        let candidates = [candidate("Hum", "You'd Prefer an Astronaut")];
+        let mut calls = Vec::new();
+        let (hits, searched) = lookup(
+            &candidates,
+            &[false],
+            &mut cache,
+            NOW,
+            Duration::ZERO,
+            fake_search(&mut calls, Vec::new()),
+        )
+        .await
+        .unwrap();
+        assert!(calls.is_empty());
+        assert_eq!(searched, 0);
+        assert_eq!(cache.searches_left(), SEARCH_BUDGET);
+        let (report, _) = check(&candidates, &hits, &[], &[], &[]);
+        assert_eq!(reasons(&report), [Rejection::NotFound]);
+
+        let cache = SearchCache::load(&path, NOW + 60 + NOT_FOUND_MAX_AGE);
+        assert_eq!(cache.get("Hum", "You'd Prefer an Astronaut"), None);
     }
 
     #[test]

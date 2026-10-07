@@ -10,14 +10,21 @@ in the current directory, Read and WebSearch.
 
 ## Steps
 
-1. **Read the taste profile.** Run `deck taste`. It prints about 50 kB of JSON; if the
-   output is saved to a file, read the whole file before you choose anything.
+1. **Read the taste profile.** Run `deck taste`. It prints about 200 kB of JSON; if the
+   output is saved to a file, read the whole file (in parts if it is too long for one
+   read) before you choose anything.
    - `lastfm.top_artists.overall` (200), `3year` (100) and `12month` (100): their most
      played artists with play counts. The 3-year and 12-month lists show where their
      taste is now; `overall` reaches much further back.
    - `lastfm.top_albums`: their most played albums of all time.
+   - `lastfm.listened`: every album they have played at least 3 times, as
+     "Artist – Album", most played first. They know these already: never suggest one
+     (it would be rejected as `listened`).
    - `shelf`: the albums they have collected by hand in Deck. These are the records they
      value most.
+   - `not_on_spotify`: candidates of earlier runs that were not found on Spotify, as
+     "Artist – Album". Do not suggest them again under the same title; if you are sure
+     the album exists under another title, check the exact title with WebSearch.
    - `history`: everything suggested in earlier rounds. `rejected: true` means they
      dismissed it ("not for me"), `on_shelf: true` means they liked it enough to put it on
      the shelf.
@@ -51,7 +58,8 @@ in the current directory, Read and WebSearch.
      order, at most 20.
    - `rejected`: candidates that failed, with `reason`:
      - `not_found`: no album with a matching artist and title on Spotify. Check the exact
-       title (WebSearch helps) and try once more, or replace it.
+       title (WebSearch helps) and try once more, or replace it. Deck remembers it for
+       half a year, so the same title is not searched again.
      - `on_shelf`: already on their shelf.
      - `suggested_before`: suggested in an earlier round.
      - `listened`: at least 3 plays on Last.fm, so they know it.
@@ -66,7 +74,8 @@ in the current directory, Read and WebSearch.
      much, so `deck curate submit` makes at most 50 searches a day. The limit is shared
      with `deck genre add`, so `searches_left` may be below 50 before your first dry
      run. A candidate already checked in this run costs nothing, and neither does one on
-     the shelf, in the history or listened. Every new candidate costs one search.
+     the shelf, in the history, listened or not on Spotify. Every new candidate costs one
+     search.
 
    Replace the rejected ones with new candidates and run the dry run again until
    `missing` is 0. Keep the candidates you already have exactly as they were, and add

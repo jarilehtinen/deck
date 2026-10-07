@@ -377,7 +377,9 @@ scripts/install-curate.sh --uninstall
 Deck). Claude can only run two Deck commands, write candidate files in
 `~/.cache/deck/curate/` and search the web:
 
-- `deck taste` prints your taste profile: Last.fm history, shelf and earlier lists.
+- `deck taste` prints your taste profile: Last.fm history (including every album you
+  have already listened to), shelf, earlier lists and earlier candidates that were not
+  on Spotify.
 - `deck curate submit [--dry-run]` reads album candidates with reasons, finds them on
   Spotify and reports which ones are accepted and why others are not (not on Spotify, on
   your shelf, suggested before, already listened to). Without `--dry-run` it saves the
@@ -404,7 +406,7 @@ them meets it first, the others wait too.
 | `~/.config/deck/curated.json` | This week's Curated list |
 | `~/.config/deck/curated-history.json` | Everything Curated has suggested |
 | `~/.cache/deck/` | Sign-ins (`credentials.json`, `webapi.json`), Deck's log `deck.log` (the previous run's log is `deck.log.1`), Curated's log `curate.log` and the caches below |
-| `~/.cache/deck/curate-searches.json` | Spotify searches of the last day by `deck curate submit` and `deck genre add`, and the daily search count |
+| `~/.cache/deck/curate-searches.json` | Spotify searches of the last day by `deck curate submit` and `deck genre add`, the daily search count, and Curated's candidates that were not found on Spotify (kept for half a year) |
 | `~/.cache/deck/rate-limit.json` | A possible 429 block from Spotify, shared by Deck, `deck curate submit` and `deck genre add` |
 | `~/.cache/deck/lastfm-albums.json` | Albums you have listened to on Last.fm, fetched again after a day |
 | `~/.cache/deck/curate/` | The weekly Curated run's working folder: Claude's candidate files from the latest run |

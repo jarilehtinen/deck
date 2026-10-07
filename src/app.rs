@@ -31,7 +31,7 @@
 //! ← / → in any view. `State::now_playing_info` reports the playing track to Now
 //! Playing.
 //!
-//! Ctrl+N (n outside search) opens the album or radio of the playing track
+//! Ctrl+N (n outside the search field) opens the album or radio of the playing track
 //! (`State::open_playing`): that is why album details travel in the playback state.
 //!
 //! Ctrl+L likes the playing track or removes the like (Liked Songs). Likes live in the
@@ -320,6 +320,9 @@ pub struct SearchView {
     /// Selection in the result list: artists first, then albums.
     pub selected: usize,
     pub scroll: Scroll,
+    /// Keys go to the result list instead of the search field: ↓ or Enter moves there,
+    /// ↑ on the first row or f goes back. Only then is a row selected.
+    pub in_results: bool,
     due: Option<Instant>,
     /// The last search sent; only its results are accepted.
     requested: Option<String>,
@@ -968,12 +971,12 @@ impl State {
     }
 
     fn key(&mut self, key: Key, now: Instant) -> Vec<Action> {
-        // Outside search, Ctrl keys also work as plain letters. The queue's letter
-        // is u, because q quits.
-        let search = matches!(self.view(), View::Search(_));
+        // Outside the search field, Ctrl keys also work as plain letters. The queue's
+        // letter is u, because q quits.
+        let typing = matches!(self.view(), View::Search(search) if !search.in_results);
         let key = match key {
-            Key::Char(c @ ('f' | 'l' | 'e' | 'a' | 'd' | 'r' | 'n')) if !search => Key::Ctrl(c),
-            Key::Char('u') if !search => Key::Ctrl('q'),
+            Key::Char(c @ ('f' | 'l' | 'e' | 'a' | 'd' | 'r' | 'n')) if !typing => Key::Ctrl(c),
+            Key::Char('u') if !typing => Key::Ctrl('q'),
             key => key,
         };
         match key {
@@ -1000,7 +1003,7 @@ impl State {
             }
             _ => {}
         }
-        if let View::Search(_) = self.view() {
+        if typing {
             return self.search_key(key, now);
         }
         match key {
@@ -1016,7 +1019,7 @@ impl State {
                 View::Queue { .. } => self.queue_key(key),
                 View::Genres { .. } => self.genres_key(key),
                 View::Radio(_) => self.radio_key(key, now),
-                View::Search(_) => Vec::new(),
+                View::Search(_) => self.search_results_key(key),
             },
         }
     }
@@ -1309,10 +1312,16 @@ impl State {
         }
     }
 
-    /// Opens search. If search is already on the stack, returns to it (the text is kept).
+    /// Opens search in the search field. If search is already on the stack, returns to
+    /// it (the text and results are kept).
     fn open_search(&mut self) {
         match self.views.iter().position(|v| matches!(v, View::Search(_))) {
-            Some(index) => self.views.truncate(index + 1),
+            Some(index) => {
+                self.views.truncate(index + 1);
+                if let Some(search) = search_view(&mut self.views) {
+                    search.in_results = false;
+                }
+            }
             None => self.views.push(View::Search(SearchView::default())),
         }
     }
@@ -1765,6 +1774,7 @@ impl State {
         }
     }
 
+    /// A key in the search field.
     fn search_key(&mut self, key: Key, now: Instant) -> Vec<Action> {
         let Some(View::Search(search)) = self.views.last_mut() else {
             return Vec::new();
@@ -1784,6 +1794,22 @@ impl State {
             }
             Key::Left => search.cursor = search.cursor.saturating_sub(1),
             Key::Right => search.cursor = (search.cursor + 1).min(search.query.chars().count()),
+            Key::Down | Key::Enter if !search.items().is_empty() => {
+                search.in_results = true;
+                search.selected = 0;
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    /// A key in the search results; the keys every view shares are handled already.
+    fn search_results_key(&mut self, key: Key) -> Vec<Action> {
+        let Some(View::Search(search)) = self.views.last_mut() else {
+            return Vec::new();
+        };
+        match key {
+            Key::Up if search.selected == 0 => search.in_results = false,
             Key::Up | Key::Down => {
                 let len = search.items().len();
                 step(&mut search.selected, key, len);
@@ -1853,6 +1879,7 @@ impl State {
             Ok(results) => {
                 search.results = Some(results);
                 search.selected = 0;
+                search.in_results &= !search.items().is_empty();
                 self.error = None;
             }
             Err(message) => {
@@ -3049,9 +3076,10 @@ mod tests {
         let mut app = shelf_app();
         app.key(Ctrl('f'));
         app.search("nirvana", vec![artist("Nirvana")], vec![nevermind()]);
-        app.key(Down);
+        app.keys(&[Down, Down]);
         assert_eq!(app.search_view().selected, 1);
-        app.key(Char('s'));
+        // f returns to the search field with the cursor at the end.
+        app.keys(&[Char('f'), Char('s')]);
         assert_eq!(app.wait(300), [Action::Search("nirvanas".into())]);
         assert_eq!(app.search_view().selected, 1);
         app.send(Event::Searched {
@@ -3127,12 +3155,87 @@ mod tests {
             vec![artist("Nirvana"), artist("Nick Cave")],
             vec![nevermind()],
         );
-        app.key(Up);
-        assert_eq!(app.search_view().selected, 0);
-        app.keys(&[Down, Down, Down, Down]);
+        app.keys(&[Down, Down, Down, Down, Down]);
         assert_eq!(app.search_view().selected, 2);
         app.key(Up);
         assert_eq!(app.search_view().selected, 1);
+    }
+
+    #[test]
+    fn search_results_are_entered_with_down_or_enter_and_left_with_up_or_f() {
+        let mut app = shelf_app();
+        app.key(Ctrl('f'));
+        app.search(
+            "n",
+            vec![artist("Nirvana"), artist("Nick Cave")],
+            vec![nevermind()],
+        );
+        // While typing no row is selected, and Up stays in the field.
+        assert!(!app.search_view().in_results);
+        assert!(app.key(Up).is_empty());
+        assert!(!app.search_view().in_results);
+        app.key(Down);
+        assert!(app.search_view().in_results);
+        assert_eq!(app.search_view().selected, 0);
+        // Up on the first row returns to the field.
+        app.key(Up);
+        assert!(!app.search_view().in_results);
+        // Enter in the field moves to the first row, like Down.
+        assert!(app.key(Enter).is_empty());
+        assert!(app.search_view().in_results);
+        app.key(Down);
+        assert_eq!(app.search_view().selected, 1);
+        // f returns to the field, and the next visit starts from the first row.
+        app.key(Char('f'));
+        assert!(!app.search_view().in_results);
+        assert_eq!(app.search_view().query, "n");
+        app.key(Down);
+        assert_eq!(app.search_view().selected, 0);
+    }
+
+    #[test]
+    fn search_results_take_player_keys_and_ignore_other_letters() {
+        let mut app = in_bloom_playing();
+        app.key(Ctrl('f'));
+        app.search("n", vec![artist("Nirvana")], vec![]);
+        app.key(Down);
+        assert!(app.keys(&[Char('m'), Char('x'), Backspace]).is_empty());
+        assert_eq!(app.search_view().query, "n");
+        assert_eq!(app.key(Char(' ')), [Action::TogglePause]);
+        assert_eq!(app.key(Char('q')), [Action::Quit]);
+        // Esc closes search, like everywhere.
+        app.key(Esc);
+        assert!(!matches!(app.state.view(), View::Search(_)));
+    }
+
+    #[test]
+    fn ctrl_f_returns_to_search_field() {
+        let mut app = shelf_app();
+        app.key(Ctrl('f'));
+        app.search("nirvana", vec![artist("Nirvana")], vec![nevermind()]);
+        app.keys(&[Down, Down, Enter]);
+        app.key(Ctrl('f'));
+        assert!(!app.search_view().in_results);
+        assert_eq!(app.search_view().query, "nirvana");
+    }
+
+    #[test]
+    fn empty_results_leave_search_results() {
+        let mut app = shelf_app();
+        app.key(Ctrl('f'));
+        app.search("nirvana", vec![artist("Nirvana")], vec![]);
+        app.key(Down);
+        // A search still waiting for its delay brings no results.
+        app.key(Up);
+        app.key(Char('x'));
+        app.key(Down);
+        assert!(app.search_view().in_results);
+        assert_eq!(app.wait(300), [Action::Search("nirvanax".into())]);
+        app.send(Event::Searched {
+            query: "nirvanax".into(),
+            result: Ok(SearchResults::default()),
+        });
+        assert!(!app.search_view().in_results);
     }
 
     #[test]
@@ -3148,12 +3251,13 @@ mod tests {
         let mut app = shelf_app();
         app.key(Ctrl('f'));
         app.search("n", vec![artist("Nirvana")], vec![nevermind(), in_utero()]);
-        app.keys(&[Down, Down]);
+        app.keys(&[Down, Down, Down]);
         assert_eq!(app.key(Enter), [load_tracks("inutero")]);
         assert_eq!(app.album_view().album, in_utero());
-        // Esc returns to search, with the text and selection intact.
+        // Esc returns to the search results, with the text and selection intact.
         app.key(Esc);
         assert_eq!(app.search_view().query, "n");
+        assert!(app.search_view().in_results);
         assert_eq!(app.search_view().selected, 2);
     }
 
@@ -3162,7 +3266,9 @@ mod tests {
         let mut app = App::new(vec![]);
         app.key(Ctrl('f'));
         app.search("n", vec![artist("Nirvana")], vec![nevermind()]);
-        // On an artist Ctrl+A does nothing.
+        // In the field and on an artist Ctrl+A does nothing.
+        assert!(app.key(Ctrl('a')).is_empty());
+        app.key(Down);
         assert!(app.key(Ctrl('a')).is_empty());
         app.key(Down);
         assert_eq!(app.key(Ctrl('a')), [Action::AddToShelf(nevermind())]);
@@ -3214,6 +3320,7 @@ mod tests {
         let mut app = shelf_app();
         app.key(Ctrl('f'));
         app.search("nirvana", vec![artist("Nirvana")], vec![]);
+        app.key(Down);
         assert_eq!(
             app.key(Enter),
             [Action::LoadArtistAlbums("id-nirvana".into())]
@@ -3619,7 +3726,7 @@ mod tests {
         let mut app = App::new(vec![]);
         app.key(Ctrl('f'));
         app.search("n", vec![], vec![nevermind()]);
-        app.key(Enter);
+        app.keys(&[Enter, Enter]);
         app.send(album_tracks(&nevermind(), Ok(nevermind_tracks())));
         app.key(Down);
         assert_eq!(app.key(Ctrl('a')), [Action::AddToShelf(nevermind())]);
@@ -3740,10 +3847,11 @@ mod tests {
         let mut app = App::new(vec![]);
         app.key(Ctrl('f'));
         app.search("n", vec![artist("Nirvana")], vec![nevermind()]);
-        // An artist cannot be queued, an album can.
+        // An artist cannot be queued, an album can (with e too, in the results).
+        app.key(Down);
         assert!(app.key(Ctrl('e')).is_empty());
         app.key(Down);
-        assert_eq!(app.key(Ctrl('e')), [Action::QueueAlbum(nevermind())]);
+        assert_eq!(app.key(Char('e')), [Action::QueueAlbum(nevermind())]);
         assert_eq!(app.search_view().query, "n");
     }
 
@@ -4923,7 +5031,7 @@ mod tests {
         app.state.views.truncate(1);
         app.key(Ctrl('f'));
         app.search("nevermind", vec![], vec![nevermind()]);
-        app.key(Enter);
+        app.keys(&[Enter, Enter]);
         app.send(album_tracks(&nevermind(), Ok(nevermind_tracks())));
         assert_eq!(app.key(Enter), [play("nevermind", 0)]);
         assert_eq!(app.state.playing_genre(), None);
@@ -5326,7 +5434,15 @@ mod tests {
     }
 
     #[test]
-    fn letters_work_like_ctrl_keys_in_every_view_but_search() {
+    fn letters_work_like_ctrl_keys_in_every_view_but_search_field() {
+        // Search results, on an album.
+        assert_letters_match_ctrl(|| {
+            let mut app = shelf_app();
+            app.key(Ctrl('f'));
+            app.search("n", vec![artist("Nirvana")], vec![in_utero()]);
+            app.keys(&[Down, Down]);
+            app
+        });
         // Shelf: an artist and a genre on the home page.
         assert_letters_match_ctrl(shelf_app);
         assert_letters_match_ctrl(|| genre_app(&["lofi"]));

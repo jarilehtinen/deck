@@ -214,11 +214,11 @@ The bottom row of every view shows the most useful keys. All of them:
 | `r` or Ctrl+R | In a radio: start a new radio of the same genre |
 | `u` or Ctrl+Q | Show the queue |
 | Esc | Back |
-| `q` | Quit (in search, use Ctrl+C) |
+| `q` | Quit (in the search field, use Ctrl+C) |
 | Ctrl+C | Quit, in any view |
 
-In search, letters type into the search field, so use the Ctrl versions there. The Ctrl
-versions work everywhere else too. `l` and `n` always concern the **playing** track, not
+In the search field, letters type into the search, so use the Ctrl versions there. The
+Ctrl versions work everywhere else too. `l` and `n` always concern the **playing** track, not
 the selected row.
 
 ### The screen
@@ -245,8 +245,10 @@ Albums on your shelf have a green ● after them in every list.
 ### Search
 
 Type to search; the search starts when you pause typing. ← → move the cursor. Results are
-grouped into artists and albums: Enter opens one, Ctrl+A adds an album to your shelf and
-Ctrl+E adds it to the queue. Esc goes back.
+grouped into artists and albums. ↓ or Enter moves from the search field to the results,
+where the keys work as in any other list: Enter opens an artist or album, `a` adds an
+album to your shelf and `e` adds it to the queue. ↑ on the first result or `f` goes back
+to the search field. Esc goes back from search.
 
 ### Queue
 

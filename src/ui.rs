@@ -712,10 +712,14 @@ fn search(frame: &mut Frame, state: &State, view: &SearchView, area: Rect) {
         line.push_span(" searching…".fg(MUTED));
     }
     frame.render_widget(line, input);
-    let before_cursor: String = view.query.chars().take(view.cursor).collect();
-    let x =
-        input.x + Span::raw(SEARCH_PROMPT).width() as u16 + Span::raw(before_cursor).width() as u16;
-    frame.set_cursor_position((x.min(input.right().saturating_sub(1)), input.y));
+    // The cursor shows only while typing; in the results a row is selected instead.
+    if !view.in_results {
+        let before_cursor: String = view.query.chars().take(view.cursor).collect();
+        let x = input.x
+            + Span::raw(SEARCH_PROMPT).width() as u16
+            + Span::raw(before_cursor).width() as u16;
+        frame.set_cursor_position((x.min(input.right().saturating_sub(1)), input.y));
+    }
 
     let Some(found) = &view.results else {
         return;
@@ -753,7 +757,7 @@ fn search(frame: &mut Frame, state: &State, view: &SearchView, area: Rect) {
             rows.push(Line::from(name).fg(HEADING).bold());
             group = Some(name);
         }
-        if index == view.selected {
+        if view.in_results && index == view.selected {
             selected_row = Some(rows.len());
         }
         rows.push(line);
@@ -856,8 +860,8 @@ fn hint(text: &str) -> Paragraph<'_> {
 }
 
 /// The bottom row: `[key]` in the accent colour, the label dimmed. ↑↓ and Enter (unless
-/// it plays) are left out as self-evident. Outside search, Ctrl keys are shown as
-/// plain letters (`[f] search`, for the queue `[u] show queue`, because q quits).
+/// it plays) are left out as self-evident. Outside the search field, Ctrl keys are shown
+/// as plain letters (`[f] search`, for the queue `[u] show queue`, because q quits).
 /// The Ctrl+A label tells whether it adds the selected album to the shelf (or the genre
 /// to home) or removes it from there, and like shows only while something is playing:
 /// `like playing` or `unlike playing`, because l applies to the playing track and not
@@ -866,7 +870,7 @@ fn hint(text: &str) -> Paragraph<'_> {
 /// `[n] now playing` shows when n leads somewhere, and only if the row fits with it
 /// even with the longest labels, at most by leaving out quit: otherwise it would
 /// appear and disappear as the selection moves. If the row does not fit, quit is left
-/// out (q, Ctrl+C in search); if that is not enough, Space and ←→, which work
+/// out (q, Ctrl+C in the search field); if that is not enough, Space and ←→, which work
 /// everywhere, are left out instead, except on the shelf, whose help always shows
 /// them; as a last resort both.
 ///
@@ -907,14 +911,14 @@ fn help_line(state: &State, view: &View, width: u16) -> Line<'static> {
         "Ctrl+D" if shelf => home_row,
         _ => true,
     });
-    let search = matches!(view, View::Search(_));
+    let typing = matches!(view, View::Search(view) if !view.in_results);
     for entry in &mut entries {
         match entry.0 {
             "Ctrl+A" => entry.1 = remove.unwrap_or(entry.1),
             "Ctrl+L" => entry.1 = like.unwrap_or(entry.1),
             _ => {}
         }
-        if !search {
+        if !typing {
             entry.0 = short_key(entry.0);
         }
     }
@@ -955,7 +959,7 @@ fn help_line(state: &State, view: &View, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Outside search, a Ctrl key also works as a plain letter.
+/// Outside the search field, a Ctrl key also works as a plain letter.
 fn short_key(key: &'static str) -> &'static str {
     match key {
         "Ctrl+F" => "f",
@@ -1069,13 +1073,26 @@ fn key_help(view: &View) -> &'static [(&'static str, &'static str)] {
             ("Esc", "back"),
             ("q", "quit"),
         ],
+        // In the search field letters type, so only Ctrl keys work there.
+        View::Search(SearchView {
+            in_results: false, ..
+        }) => &[
+            ("↓", "results"),
+            ("Ctrl+N", "now playing"),
+            ("Ctrl+L", "like playing"),
+            ("Esc", "back"),
+            ("Ctrl+C", "quit"),
+        ],
         View::Search(_) => &[
             ("Ctrl+E", "add to queue"),
             ("Ctrl+A", "add to shelf"),
             ("Ctrl+N", "now playing"),
             ("Ctrl+L", "like playing"),
+            ("Ctrl+F", "search"),
+            ("Space", "pause"),
+            ("←→", "track"),
             ("Esc", "back"),
-            ("Ctrl+C", "quit"),
+            ("q", "quit"),
         ],
         View::Genres { .. } => &[
             ("Enter", "play radio"),
@@ -1596,7 +1613,7 @@ mod tests {
             },
             later,
         );
-        for key in [Key::Down, Key::Down] {
+        for key in [Key::Down, Key::Down, Key::Down] {
             state.update(Event::Key(key), later);
         }
 
@@ -1646,8 +1663,29 @@ mod tests {
         assert!(!buffer[(7, 4)].modifier.contains(Modifier::UNDERLINED));
         assert!(!buffer[(12, 4)].modifier.contains(Modifier::UNDERLINED));
         assert_eq!(buffer[(0, 4)].fg, MUTED);
-        // The cursor is after the search text.
-        terminal.backend_mut().assert_cursor_position((11, 4));
+    }
+
+    #[test]
+    fn search_field_shows_cursor_and_results_show_selection() {
+        let now = Instant::now();
+        let mut state = long_search(2, now);
+        // While typing: the cursor after the search text, no row selected, Ctrl keys.
+        let mut terminal = Terminal::new(TestBackend::new(70, 12)).unwrap();
+        terminal.draw(|frame| draw(frame, &state, now)).unwrap();
+        terminal.backend_mut().assert_cursor_position((9, 4));
+        let buffer = terminal.backend().buffer().clone();
+        assert_eq!(row(&buffer, 7), "Foo Fighters");
+        assert!(!is_selected(&buffer, 0, 7));
+        assert_eq!(row(&buffer, 11), "[↓] results  [Esc] back  [Ctrl+C] quit");
+
+        // In the results: the first row selected and plain letters.
+        state.update(Event::Key(Key::Down), now);
+        let buffer = render(&state, now, 70, 12);
+        assert!(is_selected(&buffer, 0, 7));
+        assert_eq!(
+            row(&buffer, 11),
+            "[e] add to queue  [a] add to shelf  [f] search  [Esc] back  [q] quit"
+        );
     }
 
     /// Search results with `albums` albums, the last one selected.
@@ -1678,13 +1716,14 @@ mod tests {
     fn long_list_scrolls_and_leaves_a_blank_row_above_help() {
         let now = Instant::now();
         let mut state = long_search(20, now);
+        state.update(Event::Key(Key::Down), now);
         // The help row is at the bottom with an empty row above it, even though there are
         // more results than fit.
         let buffer = render(&state, now, 60, 17);
         assert_eq!(row(&buffer, 13), "Album 4  Foo Fighters");
         assert_eq!(row(&buffer, 14), "");
         assert_eq!(row(&buffer, 15), "─".repeat(60));
-        assert!(row(&buffer, 16).starts_with("[Ctrl+E] add to queue"));
+        assert!(row(&buffer, 16).starts_with("[e] add to queue"));
 
         // Selection to the end of the list: the list scrolls, the help row and gap stay.
         for _ in 0..30 {
@@ -1694,7 +1733,7 @@ mod tests {
         assert_eq!(row(&buffer, 13), "Album 20  Foo Fighters");
         assert!(is_selected(&buffer, 0, 13));
         assert_eq!(row(&buffer, 14), "");
-        assert!(row(&buffer, 16).starts_with("[Ctrl+E] add to queue"));
+        assert!(row(&buffer, 16).starts_with("[e] add to queue"));
     }
 
     #[test]
@@ -2102,7 +2141,9 @@ mod tests {
             },
             later,
         );
-        state.update(Event::Key(Key::Enter), later);
+        for key in [Key::Down, Key::Enter] {
+            state.update(Event::Key(key), later);
+        }
         let buffer = render(&state, later, 80, 10);
         // Not on the shelf: no ● in the heading.
         assert_eq!(row(&buffer, 5), "Nirvana · 1991");
@@ -2205,7 +2246,9 @@ mod tests {
                 },
                 later,
             );
-            state.update(Event::Key(Key::Enter), later);
+            for key in [Key::Down, Key::Enter] {
+                state.update(Event::Key(key), later);
+            }
             let buffer = render(&state, later, 60, 14);
             assert_eq!(row(&buffer, 4), name);
             buffer
@@ -2924,11 +2967,11 @@ mod tests {
             help_row(&state, now),
             "[Enter] play from here  [e] add to queue  [a] remove from shelf  [l] unlike playing  [Esc] back"
         );
-        // In search the Ctrl forms, because letters type into the search.
+        // In the search field the Ctrl forms, because letters type into the search.
         state.update(Event::Key(Key::Ctrl('f')), now);
         assert_eq!(
             help_row(&state, now),
-            "[Ctrl+E] add to queue  [Ctrl+A] add to shelf  [Ctrl+L] unlike playing  [Esc] back  [Ctrl+C] quit"
+            "[↓] results  [Ctrl+L] unlike playing  [Esc] back  [Ctrl+C] quit"
         );
     }
 
@@ -3034,6 +3077,8 @@ mod tests {
             later,
         );
         liked_playing_album(&mut state, later);
+        rows.push(help_row(&state, later));
+        state.update(Event::Key(Key::Down), later);
         state.update(Event::Key(Key::Down), later);
         rows.push(help_row(&state, later));
         state.update(Event::Key(Key::Up), later);
@@ -3074,7 +3119,8 @@ mod tests {
                 "[e] add to queue  [a] remove from shelf  [d] not for me  [l] unlike playing  [Esc] back",
                 "[Enter] play from here  [e] add to queue  [a] remove from shelf  [l] unlike playing  [Esc] back",
                 "[d] remove  [n] now playing  [l] unlike playing  [Space] pause  [←→] track  [Esc] back  [q] quit",
-                "[Ctrl+E] add to queue  [Ctrl+A] remove from shelf  [Ctrl+L] unlike playing  [Esc] back",
+                "[↓] results  [Ctrl+N] now playing  [Ctrl+L] unlike playing  [Esc] back  [Ctrl+C] quit",
+                "[e] add to queue  [a] remove from shelf  [l] unlike playing  [f] search  [Esc] back  [q] quit",
                 "[e] add to queue  [a] remove from shelf  [l] unlike playing  [Space] pause  [←→] track  [Esc] back",
                 "[Enter] play radio  [a] remove from home  [n] now playing  [l] unlike playing  [Esc] back",
                 "[Enter] play  [e] add to queue  [a] remove from shelf  [r] new radio  [l] unlike playing  [Esc] back",

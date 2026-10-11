@@ -1,4 +1,11 @@
-//! macOS Now Playing and the media keys (⏯ ⏮ ⏭).
+//! Now Playing and the media keys (⏯ ⏮ ⏭): macOS Now Playing, and MPRIS on Linux.
+//!
+//! On Linux the helper process registers Deck as the MPRIS player "Deck" (media keys,
+//! `playerctl`, desktop widgets), writes the playing track to `$XDG_RUNTIME_DIR/deck/state.json`
+//! for panels, and listens on `$XDG_RUNTIME_DIR/deck/control.sock` for commands from
+//! `deck ctl <command>` (including `like`, which MPRIS has no concept of).
+//!
+//! The rest of this text describes the macOS side.
 //!
 //! macOS does not send media keys to the terminal but to the Now Playing player, so
 //! Deck registers itself as a player (`MPRemoteCommandCenter` and
@@ -44,6 +51,9 @@ pub struct Info {
     pub playing: bool,
     /// Cover image URL (`https://i.scdn.co/image/…`).
     pub cover: Option<String>,
+    /// Whether the track is liked; `None` when likes are not available.
+    #[serde(default)]
+    pub liked: Option<bool>,
 }
 
 /// A media key or a Control Center button.
@@ -54,15 +64,18 @@ pub enum Command {
     Pause,
     Next,
     Previous,
+    /// Likes the playing track or removes the like (Linux `deck ctl like`).
+    ToggleLike,
 }
 
 impl Command {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Toggle,
         Self::Play,
         Self::Pause,
         Self::Next,
         Self::Previous,
+        Self::ToggleLike,
     ];
 
     fn name(self) -> &'static str {
@@ -72,6 +85,7 @@ impl Command {
             Self::Pause => "pause",
             Self::Next => "next",
             Self::Previous => "previous",
+            Self::ToggleLike => "like",
         }
     }
 
@@ -186,6 +200,170 @@ fn should_download(
             now.saturating_duration_since(*at) >= COVER_RETRY
         }
         _ => true,
+    }
+}
+
+/// `deck ctl <command>`: tells the running Deck what to do (Linux: through the control
+/// socket of the Now Playing helper).
+#[cfg(target_os = "linux")]
+pub fn send_control(command: Command) -> Result<()> {
+    linux::send_control(command)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn send_control(_command: Command) -> Result<()> {
+    anyhow::bail!("deck ctl is only available on Linux")
+}
+
+#[cfg(target_os = "linux")]
+pub use linux::serve;
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::{
+            fs::PermissionsExt,
+            net::{UnixListener, UnixStream},
+        },
+        path::PathBuf,
+        sync::{Arc, Mutex},
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+
+    use anyhow::{Context, Result};
+    use souvlaki::{
+        MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition,
+        PlatformConfig,
+    };
+
+    use super::{Command, Info};
+
+    /// `$XDG_RUNTIME_DIR/deck`: the control socket and the state file live here.
+    fn runtime_dir() -> PathBuf {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("deck")
+    }
+
+    fn socket_path() -> PathBuf {
+        runtime_dir().join("control.sock")
+    }
+
+    fn state_path() -> PathBuf {
+        runtime_dir().join("state.json")
+    }
+
+    /// The client side of `deck ctl`.
+    pub fn send_control(command: Command) -> Result<()> {
+        let mut stream = UnixStream::connect(socket_path())
+            .context("Deck is not running (no control socket)")?;
+        writeln!(stream, "{}", command.name()).context("cannot send the command to Deck")
+    }
+
+    /// `deck now-playing` on Linux: registers the MPRIS player, serves the control
+    /// socket and writes the state file. Info arrives on stdin; commands go to stdout.
+    pub fn serve() -> Result<()> {
+        let dir = runtime_dir();
+        std::fs::create_dir_all(&dir).context("cannot create the runtime directory")?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+
+        // All commands (MPRIS and the socket) go to Deck as lines on stdout.
+        let stdout = Arc::new(Mutex::new(std::io::stdout()));
+        let send = {
+            let stdout = Arc::clone(&stdout);
+            move |command: Command| {
+                if let Ok(mut out) = stdout.lock() {
+                    let _ = writeln!(out, "{}", command.name());
+                    let _ = out.flush();
+                }
+            }
+        };
+
+        let mut controls = MediaControls::new(PlatformConfig {
+            dbus_name: "deck",
+            display_name: "Deck",
+            hwnd: None,
+        })
+        .map_err(|e| anyhow::anyhow!("cannot register the MPRIS player: {e:?}"))?;
+        let mpris_send = send.clone();
+        controls
+            .attach(move |event| {
+                let command = match event {
+                    MediaControlEvent::Play => Command::Play,
+                    MediaControlEvent::Pause => Command::Pause,
+                    MediaControlEvent::Toggle => Command::Toggle,
+                    MediaControlEvent::Next => Command::Next,
+                    MediaControlEvent::Previous => Command::Previous,
+                    _ => return,
+                };
+                mpris_send(command);
+            })
+            .map_err(|e| anyhow::anyhow!("cannot attach the MPRIS handler: {e:?}"))?;
+
+        // `deck ctl` commands.
+        let _ = std::fs::remove_file(socket_path());
+        let listener = UnixListener::bind(socket_path()).context("cannot open the control socket")?;
+        let socket_send = send.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                    if let Some(command) = Command::parse(&line) {
+                        socket_send(command);
+                    }
+                }
+            }
+        });
+
+        // Deck is running (nothing playing yet): panels see an empty state instead of no file.
+        write_state(None);
+
+        // Info from Deck: one JSON line per change (`null` clears). Ends when Deck closes stdin.
+        for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+            let Ok(info) = serde_json::from_str::<Option<Info>>(&line) else {
+                continue;
+            };
+            apply(&mut controls, info.as_ref());
+            write_state(info.as_ref());
+        }
+        let _ = std::fs::remove_file(socket_path());
+        let _ = std::fs::remove_file(state_path());
+        Ok(())
+    }
+
+    fn apply(controls: &mut MediaControls, info: Option<&Info>) {
+        let Some(info) = info else {
+            let _ = controls.set_playback(MediaPlayback::Stopped);
+            let _ = controls.set_metadata(MediaMetadata::default());
+            return;
+        };
+        let _ = controls.set_metadata(MediaMetadata {
+            title: Some(&info.title),
+            artist: Some(&info.artist),
+            album: Some(&info.album),
+            cover_url: info.cover.as_deref(),
+            duration: Some(Duration::from_millis(info.duration_ms)),
+        });
+        let progress = Some(MediaPosition(Duration::from_millis(info.position_ms)));
+        let _ = controls.set_playback(if info.playing {
+            MediaPlayback::Playing { progress }
+        } else {
+            MediaPlayback::Paused { progress }
+        });
+    }
+
+    /// Writes `state.json` (`{"info": …, "updated_ms": …, "pid": …}`) atomically, for panels.
+    fn write_state(info: Option<&Info>) {
+        let updated_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        // `pid` lets readers tell a stale file (Deck was killed and could not clean up) from a live one.
+        let json = serde_json::json!({ "info": info, "updated_ms": updated_ms, "pid": std::process::id() });
+        let tmp = runtime_dir().join("state.json.tmp");
+        if std::fs::write(&tmp, json.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, state_path());
+        }
     }
 }
 
@@ -396,6 +574,7 @@ mod tests {
             position_ms,
             playing,
             cover: None,
+            liked: None,
         }
     }
 

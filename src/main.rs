@@ -49,7 +49,7 @@ const TICK: Duration = Duration::from_millis(100);
 
 const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
                      | genre add [--dry-run] | genre remove <name> | genre list | genre prompt \
-                     | --help | --version]";
+                     | ctl <toggle|play|pause|next|previous|like> | --help | --version]";
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -66,6 +66,8 @@ enum Mode {
     Genre(GenreCommand),
     /// The Now Playing helper process Deck starts itself (`now_playing`), not in the help.
     NowPlaying,
+    /// `deck ctl <command>`: tells the running Deck what to do (Linux).
+    Ctl(now_playing::Command),
     /// `--help` / `-h`: usage to stdout.
     Help,
     /// `--version` / `-V`.
@@ -102,6 +104,9 @@ impl Mode {
             ["genre", "list"] => Ok(Self::Genre(GenreCommand::List)),
             ["genre", "prompt"] => Ok(Self::Genre(GenreCommand::Prompt)),
             ["now-playing"] => Ok(Self::NowPlaying),
+            ["ctl", command] => now_playing::Command::parse(command)
+                .map(Self::Ctl)
+                .ok_or(USAGE),
             ["--help" | "-h"] => Ok(Self::Help),
             ["--version" | "-V"] => Ok(Self::Version),
             ["genre", ..] => Err(genre_cli::USAGE),
@@ -124,6 +129,15 @@ fn main() -> ExitCode {
         Mode::Version => {
             println!("deck {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
+        }
+        Mode::Ctl(command) => {
+            return match now_playing::send_control(command) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("deck: {e:#}");
+                    ExitCode::FAILURE
+                }
+            };
         }
         _ => {}
     }
@@ -153,14 +167,14 @@ fn usage_error(usage: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn now_playing() -> Result<()> {
     now_playing::serve()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn now_playing() -> Result<()> {
-    anyhow::bail!("now-playing is only available on macOS")
+    anyhow::bail!("now-playing is only available on macOS and Linux")
 }
 
 async fn run_mode(mode: Mode) -> Result<()> {
@@ -195,7 +209,7 @@ async fn run_mode(mode: Mode) -> Result<()> {
         }
         Mode::NowPlaying => now_playing(),
         // Already handled in `main` before tokio.
-        Mode::Help | Mode::Version => Ok(()),
+        Mode::Help | Mode::Version | Mode::Ctl(_) => Ok(()),
     }
 }
 
@@ -316,7 +330,7 @@ async fn event_loop(
 /// macOS Now Playing and media keys. If the helper process does not start, Deck works
 /// without them.
 fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playing::Session> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return None;
     }
     let results = results.clone();
@@ -811,6 +825,16 @@ mod tests {
         assert_eq!(mode(&["taste"]), Some(Mode::Taste));
         assert_eq!(mode(&["curate"]), Some(Mode::Curate));
         assert_eq!(mode(&["now-playing"]), Some(Mode::NowPlaying));
+        assert_eq!(
+            mode(&["ctl", "like"]),
+            Some(Mode::Ctl(now_playing::Command::ToggleLike))
+        );
+        assert_eq!(
+            mode(&["ctl", "next"]),
+            Some(Mode::Ctl(now_playing::Command::Next))
+        );
+        assert_eq!(mode(&["ctl"]), None);
+        assert_eq!(mode(&["ctl", "dance"]), None);
         assert_eq!(
             mode(&["curate", "submit"]),
             Some(Mode::CurateSubmit { dry_run: false })

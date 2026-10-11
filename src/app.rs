@@ -955,6 +955,7 @@ impl State {
             position_ms: millis(playing.elapsed(now)),
             playing: !playing.paused,
             cover: playing.cover.clone(),
+            liked: (self.likes.enabled && !playing.uri.is_empty()).then(|| self.liked(&playing.uri)),
         })
     }
 
@@ -967,6 +968,7 @@ impl State {
             MediaCommand::Play | MediaCommand::Pause => Vec::new(),
             MediaCommand::Next => self.next().into_iter().collect(),
             MediaCommand::Previous => self.previous().into_iter().collect(),
+            MediaCommand::ToggleLike => self.toggle_like(),
         }
     }
 
@@ -4172,6 +4174,7 @@ mod tests {
             position_ms: 85_000,
             playing: true,
             cover: Some("https://i.scdn.co/image/everlong".into()),
+            liked: None,
         };
         assert_eq!(app.state.now_playing_info(app.now), Some(expected.clone()));
 
@@ -5173,6 +5176,28 @@ mod tests {
         );
         app.now += NOTICE_TIME;
         assert_eq!(app.state.notice(app.now), None);
+    }
+
+    #[test]
+    fn media_like_toggles_like_and_now_playing_reports_it() {
+        let mut app = in_bloom_playing();
+        app.send(liked_checked(&["In Bloom"], Ok(vec![false])));
+        assert_eq!(
+            app.state.now_playing_info(app.now).map(|info| info.liked),
+            Some(Some(false))
+        );
+
+        // `deck ctl like` arrives as a media command and acts like Ctrl+L.
+        let media = |app: &mut App, command| app.send(Event::Media(command));
+        assert_eq!(
+            media(&mut app, MediaCommand::ToggleLike),
+            [set_liked("In Bloom", true)]
+        );
+        app.send(like_changed("In Bloom", true, Ok(())));
+        assert_eq!(
+            app.state.now_playing_info(app.now).map(|info| info.liked),
+            Some(Some(true))
+        );
     }
 
     #[test]

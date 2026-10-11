@@ -37,3 +37,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFRunLoop", "CFCGTypes"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSDictionary", "NSString", "NSURL", "NSValue"] }
 objc2-media-player = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent"] }
+
+# Linux: MPRIS (media keys, playerctl, panels) for Now Playing (`now_playing`).
+[target.'cfg(target_os = "linux")'.dependencies]
+souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] }

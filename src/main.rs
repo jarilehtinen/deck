@@ -49,7 +49,10 @@ const TICK: Duration = Duration::from_millis(100);
 
 const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
                      | genre add [--dry-run] | genre remove <name> | genre list | genre prompt \
-                     | ctl <toggle|play|pause|next|previous|like> | --help | --version]";
+                     | ctl <toggle|play|pause|next|previous|like> \
+                     | ctl play-album <uri> | ctl search <query> \
+                     | search --json <query> | artist-albums --json <artist id> \
+                     | --help | --version]";
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -67,7 +70,11 @@ enum Mode {
     /// The Now Playing helper process Deck starts itself (`now_playing`), not in the help.
     NowPlaying,
     /// `deck ctl <command>`: tells the running Deck what to do (Linux).
-    Ctl(now_playing::Command),
+    Ctl(now_playing::Control),
+    /// `deck search --json <query>`: artists and albums as JSON, for desktop launchers.
+    SearchJson(String),
+    /// `deck artist-albums --json <artist id>`: the artist's albums as JSON.
+    ArtistAlbumsJson(String),
     /// `--help` / `-h`: usage to stdout.
     Help,
     /// `--version` / `-V`.
@@ -104,8 +111,20 @@ impl Mode {
             ["genre", "list"] => Ok(Self::Genre(GenreCommand::List)),
             ["genre", "prompt"] => Ok(Self::Genre(GenreCommand::Prompt)),
             ["now-playing"] => Ok(Self::NowPlaying),
-            ["ctl", command] => now_playing::Command::parse(command)
+            ["ctl", "play-album", uri] => now_playing::Control::parse(&format!("play-album {uri}"))
                 .map(Self::Ctl)
+                .ok_or(USAGE),
+            ["search", "--json", query @ ..] if !query.is_empty() => {
+                Ok(Self::SearchJson(query.join(" ")))
+            }
+            ["artist-albums", "--json", id] => Ok(Self::ArtistAlbumsJson((*id).to_owned())),
+            ["ctl", "search", query @ ..] if !query.is_empty() => {
+                now_playing::Control::parse(&format!("search {}", query.join(" ")))
+                    .map(Self::Ctl)
+                    .ok_or(USAGE)
+            }
+            ["ctl", command] => now_playing::Command::parse(command)
+                .map(|command| Self::Ctl(now_playing::Control::Media(command)))
                 .ok_or(USAGE),
             ["--help" | "-h"] => Ok(Self::Help),
             ["--version" | "-V"] => Ok(Self::Version),
@@ -186,6 +205,25 @@ async fn run_mode(mode: Mode) -> Result<()> {
         Mode::Taste => {
             init_stderr_logging();
             curate::taste().await
+        }
+        Mode::SearchJson(query) => {
+            init_stderr_logging();
+            let catalog = Catalog::connect_stored(&Config::load()?).await?;
+            let found = catalog.search(&query).await?;
+            let artists: Vec<_> = found
+                .artists
+                .iter()
+                .map(|a| serde_json::json!({ "id": a.id, "name": a.name }))
+                .collect();
+            let json = serde_json::json!({ "artists": artists, "albums": found.albums });
+            println!("{json}");
+            Ok(())
+        }
+        Mode::ArtistAlbumsJson(artist_id) => {
+            init_stderr_logging();
+            let catalog = Catalog::connect_stored(&Config::load()?).await?;
+            println!("{}", serde_json::to_string(&catalog.artist_albums(&artist_id).await?)?);
+            Ok(())
         }
         Mode::Curate => {
             init_stderr_logging();
@@ -334,8 +372,12 @@ fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playin
         return None;
     }
     let results = results.clone();
-    now_playing::Session::start(move |command| {
-        let _ = results.send(app::Event::Media(command));
+    now_playing::Session::start(move |control| {
+        let _ = results.send(match control {
+            now_playing::Control::Media(command) => app::Event::Media(command),
+            now_playing::Control::PlayAlbum(uri) => app::Event::PlayAlbum(uri),
+            now_playing::Control::Search(query) => app::Event::Search(query),
+        });
     })
     .inspect_err(|e| log::warn!("{e:#}"))
     .ok()
@@ -384,6 +426,17 @@ impl Deck {
                         .await
                         .map_err(failed("could not load the artist's albums"));
                     app::Event::ArtistAlbums { artist_id, result }
+                });
+            }
+            Action::FetchAlbum(uri) => {
+                let catalog = self.catalog.clone();
+                self.spawn(async move {
+                    let id = uri.strip_prefix("spotify:album:").unwrap_or(&uri);
+                    let result = catalog
+                        .album(id)
+                        .await
+                        .map_err(failed("could not load the album"));
+                    app::Event::AlbumFetched { uri, result }
                 });
             }
             Action::LoadAlbumTracks(uri) => {
@@ -827,11 +880,20 @@ mod tests {
         assert_eq!(mode(&["now-playing"]), Some(Mode::NowPlaying));
         assert_eq!(
             mode(&["ctl", "like"]),
-            Some(Mode::Ctl(now_playing::Command::ToggleLike))
+            Some(Mode::Ctl(now_playing::Control::Media(now_playing::Command::ToggleLike)))
         );
         assert_eq!(
             mode(&["ctl", "next"]),
-            Some(Mode::Ctl(now_playing::Command::Next))
+            Some(Mode::Ctl(now_playing::Control::Media(now_playing::Command::Next)))
+        );
+        assert_eq!(
+            mode(&["ctl", "play-album", "spotify:album:abc"]),
+            Some(Mode::Ctl(now_playing::Control::PlayAlbum("spotify:album:abc".to_owned())))
+        );
+        assert_eq!(mode(&["ctl", "play-album", "spotify:track:abc"]), None);
+        assert_eq!(
+            mode(&["ctl", "search", "fm-84", "atlas"]),
+            Some(Mode::Ctl(now_playing::Control::Search("fm-84 atlas".to_owned())))
         );
         assert_eq!(mode(&["ctl"]), None);
         assert_eq!(mode(&["ctl", "dance"]), None);

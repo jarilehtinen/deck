@@ -283,6 +283,13 @@ impl Catalog {
         Ok(items.into_iter().map(Album::from).collect())
     }
 
+    /// One album's details (name, artist, year), e.g. for playing an album that is not on
+    /// the shelf (`deck ctl play-album`).
+    pub async fn album(&self, album_id: &str) -> Result<Album> {
+        let album: ApiAlbum = self.get(&format!("/albums/{album_id}"), &[]).await?;
+        Ok(Album::from(album))
+    }
+
     /// The album's tracks. The list does not change, so it is kept in memory: opening
     /// an album fetches it for both the view and the player with one request.
     pub async fn album_tracks(&self, album_id: &str) -> Result<Vec<Track>> {

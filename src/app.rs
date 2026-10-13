@@ -99,6 +99,10 @@ pub enum Event {
     /// A Mac media key or a Control Center button: works like Space and ← / →
     /// regardless of the view (in search too).
     Media(MediaCommand),
+    /// `deck ctl play-album <uri>`: open the album (shelf or Curated) and play it from the start.
+    PlayAlbum(String),
+    /// `deck ctl search <query>`: open the search view with the query and search right away.
+    Search(String),
     /// Time passing: fires the debounced search. The loop must send this more often
     /// than `SEARCH_DEBOUNCE`.
     Tick,
@@ -117,6 +121,11 @@ pub enum Event {
     AlbumQueued {
         album: Album,
         result: Result<Vec<Track>, String>,
+    },
+    /// Result of `Action::FetchAlbum`.
+    AlbumFetched {
+        uri: String,
+        result: Result<Album, String>,
     },
     /// Result of `Action::LoadArtistAlbums`.
     ArtistAlbums {
@@ -171,6 +180,9 @@ pub enum Action {
     LoadArtistAlbums(String),
     /// Fetch the album's (URI) tracks for the track list.
     LoadAlbumTracks(String),
+    /// Fetch an album's details (URI) to play it (`deck ctl play-album` for an album that is
+    /// neither on the shelf nor in Curated).
+    FetchAlbum(String),
     /// Fetch the album's tracks for the queue.
     QueueAlbum(Album),
     AddToShelf(Album),
@@ -570,6 +582,8 @@ pub struct State {
     rng: u64,
     /// Shown until the next action succeeds.
     pub error: Option<String>,
+    /// An album asked for by `deck ctl play-album`: it plays as soon as its tracks arrive.
+    play_on_load: Option<String>,
 }
 
 impl State {
@@ -595,6 +609,7 @@ impl State {
             likes: Likes::default(),
             rng: genres::random() | 1,
             error: None,
+            play_on_load: None,
         };
         state.set_shelf(shelf);
         state
@@ -761,6 +776,8 @@ impl State {
         let actions = match event {
             Event::Key(key) => self.key(key, now),
             Event::Media(command) => self.media(command),
+            Event::PlayAlbum(uri) => self.play_album_remote(uri),
+            Event::Search(query) => self.search_remote(&query),
             Event::Tick => self.tick(now),
             Event::Player(event) => self.player(event, now),
             Event::Searched { query, result } => {
@@ -768,6 +785,7 @@ impl State {
                 Vec::new()
             }
             Event::AlbumTracks { uri, result } => self.album_tracks(&uri, result),
+            Event::AlbumFetched { uri, result } => self.album_fetched(&uri, result),
             Event::AlbumQueued { album, result } => self.album_queued(&album, result, now),
             Event::ArtistAlbums { artist_id, result } => {
                 self.artist_albums(&artist_id, result);
@@ -1024,6 +1042,63 @@ impl State {
                 View::Search(_) => self.search_results_key(key),
             },
         }
+    }
+
+    /// `deck ctl play-album <uri>`: opens the album and plays it from the first track once the
+    /// tracks have arrived. The details come from the shelf or Curated, otherwise from Spotify.
+    fn play_album_remote(&mut self, uri: String) -> Vec<Action> {
+        let curated = self.curated.as_ref().map_or(&[][..], |list| &list.albums);
+        let album = self
+            .shelf
+            .iter()
+            .find(|album| album.uri == uri)
+            .cloned()
+            .or_else(|| {
+                let entry = curated.iter().find(|entry| entry.album.uri == uri)?;
+                Some(entry.album.clone())
+            });
+        self.play_on_load = Some(uri.clone());
+        match album {
+            Some(album) => self.open_album(album),
+            // Not on the shelf or in Curated: fetch its details first (`album_fetched`).
+            None => vec![Action::FetchAlbum(uri)],
+        }
+    }
+
+    /// `Event::AlbumFetched`: an album asked for by `deck ctl play-album` opens, and it plays
+    /// when its tracks arrive (`album_tracks`).
+    fn album_fetched(&mut self, uri: &str, result: Result<Album, String>) -> Vec<Action> {
+        if self.play_on_load.as_deref() != Some(uri) {
+            return Vec::new();
+        }
+        match result {
+            Ok(album) => self.open_album(album),
+            Err(message) => {
+                self.play_on_load = None;
+                self.error = Some(message);
+                Vec::new()
+            }
+        }
+    }
+
+    /// `deck ctl search <query>`: opens the search view with the query and searches right away,
+    /// without the typing debounce.
+    fn search_remote(&mut self, query: &str) -> Vec<Action> {
+        let query = query.trim().to_owned();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        self.open_search();
+        let Some(search) = search_view(&mut self.views) else {
+            return Vec::new();
+        };
+        search.cursor = query.chars().count();
+        search.query = query.clone();
+        search.in_results = false;
+        search.due = None;
+        search.requested = Some(query.clone());
+        search.pending = true;
+        vec![Action::Search(query)]
     }
 
     /// Plays an album (`len` tracks) from track `track`. The queue is kept and plays after
@@ -1892,7 +1967,7 @@ impl State {
     }
 
     fn album_tracks(&mut self, uri: &str, result: Result<Vec<Track>, String>) -> Vec<Action> {
-        let actions = match &result {
+        let mut actions = match &result {
             Ok(tracks) => self
                 .likes
                 .check(tracks.iter().map(|track| track.uri.as_str())),
@@ -1910,6 +1985,18 @@ impl State {
                 }
                 clamp(&mut view.selected, tracks.len());
                 view.tracks = Some(tracks);
+            }
+        }
+        if self.play_on_load.as_deref() == Some(uri) {
+            self.play_on_load = None;
+            let album = self.views.iter().rev().find_map(|view| match view {
+                View::Album(view) if view.album.uri == uri => Some(view.album.clone()),
+                _ => None,
+            });
+            if let (Ok(tracks), Some(album)) = (&result, album)
+                && !tracks.is_empty()
+            {
+                actions.extend(self.play_album(album, tracks.len(), 0));
             }
         }
         match result {
@@ -3537,6 +3624,65 @@ mod tests {
         assert_eq!(app.key(Enter), [load_tracks("nevermind")]);
         app.send(album_tracks(&nevermind(), Ok(nevermind_tracks())));
         app
+    }
+
+    #[test]
+    fn ctl_play_album_opens_the_shelf_album_and_plays_it_when_tracks_arrive() {
+        let mut app = shelf_app();
+        let uri = nevermind().uri;
+        assert_eq!(app.send(Event::PlayAlbum(uri)), [load_tracks("nevermind")]);
+        let actions = app.send(album_tracks(&nevermind(), Ok(nevermind_tracks())));
+        assert!(actions.contains(&play("nevermind", 0)), "{actions:?}");
+        assert_eq!(app.album_view().album, nevermind());
+        // Only once: tracks arriving again (e.g. reopening the album) don't restart playback.
+        let again = app.send(album_tracks(&nevermind(), Ok(nevermind_tracks())));
+        assert!(!again.contains(&play("nevermind", 0)));
+    }
+
+    #[test]
+    fn ctl_search_opens_search_and_searches_at_once() {
+        let mut app = shelf_app();
+        let actions = app.send(Event::Search("  fm-84 atlas ".to_owned()));
+        assert_eq!(actions, [Action::Search("fm-84 atlas".into())]);
+        assert_eq!(app.search_view().query, "fm-84 atlas");
+        assert!(app.search_view().searching());
+        // The debounce doesn't send the same search again.
+        assert!(app.wait(300).is_empty());
+    }
+
+    #[test]
+    fn ctl_play_album_fetches_an_unknown_album_first() {
+        let mut app = shelf_app();
+        let uri = "spotify:album:unknown".to_owned();
+        assert_eq!(
+            app.send(Event::PlayAlbum(uri.clone())),
+            [Action::FetchAlbum(uri.clone())]
+        );
+        let album = Album {
+            uri: uri.clone(),
+            id: "unknown".into(),
+            ..nevermind()
+        };
+        let actions = app.send(Event::AlbumFetched {
+            uri: uri.clone(),
+            result: Ok(album.clone()),
+        });
+        assert_eq!(actions, [Action::LoadAlbumTracks(uri)]);
+        let actions = app.send(album_tracks(&album, Ok(nevermind_tracks())));
+        assert!(actions.contains(&play("unknown", 0)), "{actions:?}");
+    }
+
+    #[test]
+    fn ctl_play_album_reports_a_failed_fetch() {
+        let mut app = shelf_app();
+        let uri = "spotify:album:gone".to_owned();
+        app.send(Event::PlayAlbum(uri.clone()));
+        let actions = app.send(Event::AlbumFetched {
+            uri,
+            result: Err("not found".into()),
+        });
+        assert!(actions.is_empty());
+        assert_eq!(app.state.error.as_deref(), Some("not found"));
     }
 
     #[test]

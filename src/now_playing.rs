@@ -94,6 +94,43 @@ impl Command {
     }
 }
 
+/// What the running Deck can be told: a media key, an album to play (`deck ctl play-album <uri>`)
+/// or a search to open (`deck ctl search <query>`), e.g. from a desktop launcher. It travels as
+/// one line over the control socket and the helper's stdout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Control {
+    Media(Command),
+    PlayAlbum(String),
+    Search(String),
+}
+
+impl Control {
+    pub fn parse(line: &str) -> Option<Self> {
+        let line = line.trim();
+        if let Some(uri) = line.strip_prefix("play-album ") {
+            let uri = uri.trim();
+            return uri
+                .starts_with("spotify:album:")
+                .then(|| Self::PlayAlbum(uri.to_owned()));
+        }
+        if let Some(query) = line.strip_prefix("search ") {
+            let query = query.trim();
+            return (!query.is_empty()).then(|| Self::Search(query.to_owned()));
+        }
+        Command::parse(line).map(Self::Media)
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn line(&self) -> String {
+        match self {
+            Self::Media(command) => command.name().to_owned(),
+            Self::PlayAlbum(uri) => format!("play-album {uri}"),
+            // One line on the wire: a pasted newline must not split the query.
+            Self::Search(query) => format!("search {}", query.replace(['\n', '\r'], " ")),
+        }
+    }
+}
+
 /// Deck's side: the helper process that is told the playing track and sends the keys.
 pub struct Session {
     child: Child,
@@ -105,7 +142,7 @@ pub struct Session {
 impl Session {
     /// Starts the helper process (`deck now-playing`). Keys are read in a thread of
     /// their own and passed to `on_command`.
-    pub fn start(on_command: impl Fn(Command) + Send + 'static) -> Result<Self> {
+    pub fn start(on_control: impl Fn(Control) + Send + 'static) -> Result<Self> {
         let exe = std::env::current_exe().context("cannot find the deck executable")?;
         let mut child = std::process::Command::new(exe)
             .arg("now-playing")
@@ -117,8 +154,8 @@ impl Session {
         let stdout = child.stdout.take().context("now-playing has no stdout")?;
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Some(command) = Command::parse(&line) {
-                    on_command(command);
+                if let Some(control) = Control::parse(&line) {
+                    on_control(control);
                 }
             }
         });
@@ -206,12 +243,12 @@ fn should_download(
 /// `deck ctl <command>`: tells the running Deck what to do (Linux: through the control
 /// socket of the Now Playing helper).
 #[cfg(target_os = "linux")]
-pub fn send_control(command: Command) -> Result<()> {
-    linux::send_control(command)
+pub fn send_control(control: Control) -> Result<()> {
+    linux::send_control(control)
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn send_control(_command: Command) -> Result<()> {
+pub fn send_control(_control: Control) -> Result<()> {
     anyhow::bail!("deck ctl is only available on Linux")
 }
 
@@ -237,7 +274,7 @@ mod linux {
         PlatformConfig,
     };
 
-    use super::{Command, Info};
+    use super::{Command, Control, Info};
 
     /// `$XDG_RUNTIME_DIR/deck`: the control socket and the state file live here.
     fn runtime_dir() -> PathBuf {
@@ -256,10 +293,10 @@ mod linux {
     }
 
     /// The client side of `deck ctl`.
-    pub fn send_control(command: Command) -> Result<()> {
+    pub fn send_control(control: Control) -> Result<()> {
         let mut stream = UnixStream::connect(socket_path())
             .context("Deck is not running (no control socket)")?;
-        writeln!(stream, "{}", command.name()).context("cannot send the command to Deck")
+        writeln!(stream, "{}", control.line()).context("cannot send the command to Deck")
     }
 
     /// `deck now-playing` on Linux: registers the MPRIS player, serves the control
@@ -273,9 +310,9 @@ mod linux {
         let stdout = Arc::new(Mutex::new(std::io::stdout()));
         let send = {
             let stdout = Arc::clone(&stdout);
-            move |command: Command| {
+            move |control: Control| {
                 if let Ok(mut out) = stdout.lock() {
-                    let _ = writeln!(out, "{}", command.name());
+                    let _ = writeln!(out, "{}", control.line());
                     let _ = out.flush();
                 }
             }
@@ -298,7 +335,7 @@ mod linux {
                     MediaControlEvent::Previous => Command::Previous,
                     _ => return,
                 };
-                mpris_send(command);
+                mpris_send(Control::Media(command));
             })
             .map_err(|e| anyhow::anyhow!("cannot attach the MPRIS handler: {e:?}"))?;
 
@@ -309,8 +346,8 @@ mod linux {
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 for line in BufReader::new(stream).lines().map_while(Result::ok) {
-                    if let Some(command) = Command::parse(&line) {
-                        socket_send(command);
+                    if let Some(control) = Control::parse(&line) {
+                        socket_send(control);
                     }
                 }
             }
@@ -629,6 +666,20 @@ mod tests {
             );
         }
         assert_eq!(Command::parse("seek"), None);
+    }
+
+    #[test]
+    fn control_lines_round_trip() {
+        let album = Control::PlayAlbum("spotify:album:abc".to_owned());
+        assert_eq!(album.line(), "play-album spotify:album:abc");
+        assert_eq!(Control::parse(&format!("{}\n", album.line())), Some(album));
+        assert_eq!(Control::parse("next"), Some(Control::Media(Command::Next)));
+        assert_eq!(Control::parse("play-album spotify:track:abc"), None);
+        assert_eq!(Control::parse("play-album"), None);
+        let search = Control::Search("fm-84 atlas".to_owned());
+        assert_eq!(Control::parse(&search.line()), Some(search));
+        assert_eq!(Control::Search("a\nb".to_owned()).line(), "search a b");
+        assert_eq!(Control::parse("search   "), None);
     }
 
     #[test]

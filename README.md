@@ -1,28 +1,10 @@
 # Deck
 
-Deck is a minimal Spotify player for the terminal on macOS. It plays music itself (you do
+Deck is a minimal Spotify player for the terminal on macOS and Linux. It plays music itself (you do
 not need the Spotify app open), and it is built around your own **album shelf**: a
 hand-picked collection of records instead of playlists and endless feeds.
 
-```
-DECK
-Gene Clark / No Other / Life's Greatest Fool ♥                                 01:42
-─────────────────────────────●──────────────────────────────────────────────────────
-
-✦ Curated                                                        20 albums · week 41
-≋ lofi                                                                         radio
-≋ synthwave                                                                    radio
-≋ Genres                                                                   26 genres
-
-Big Star
-Foo Fighters
-Gene Clark
-Nirvana
-Teenage Fanclub
-
-────────────────────────────────────────────────────────────────────────────────────
-[Space] pause  [←→] track  [l] unlike playing  [f] search  [u] show queue  [q] quit
-```
+![Deck's main view: the playing track, Curated, genre radios and the artists on the shelf](docs/deck.jpg)
 
 The top rows show what is playing and how far along it is. Below them are your lists:
 **Curated**, your favourite **genre radios** and all **Genres**, and then the artists on
@@ -34,23 +16,7 @@ Curated is the heart of Deck. Every Monday it puts together a list of 20 albums 
 not heard yet, picked for your taste. **Every album comes with a short reason** – why
 this record is on the list for _you_ – so choosing what to play next is easy:
 
-```
-Curated
-20 albums · week 41
-
-Gene Clark · No Other  1974
-Big Star · #1 Record  1972
-Judee Sill · Heart Food  1973
-The dB's · Repercussion  1982
-Teenage Fanclub · Grand Prix  1995 ●
-…
-
-Cosmic country-rock that Teenage Fanclub and The Posies grew up on, overlooked when
-it came out, and a record you return to for decades.
-
-────────────────────────────────────────────────────────────────────────────────────
-[e] add to queue  [a] add to shelf  [d] not for me  [l] unlike playing  [Esc] back
-```
+![Curated: this week's albums, with the selected album's reason at the bottom](docs/curated.jpg)
 
 The reason of the selected album is shown at the bottom, and also above the track list
 when you open the album.
@@ -90,7 +56,7 @@ works without it.
 
 - **Spotify Premium.** Spotify only lets Premium accounts play music in third-party
   players.
-- **macOS.**
+- **macOS**, or **Linux** (tested on Fedora Asahi Remix on Apple Silicon).
 - **Rust**, to build Deck from source.
 - For Curated (optional): a free **Last.fm account** that has been recording what you
   listen to, and **Claude Code**.
@@ -108,6 +74,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 Follow the instructions of the Rust installer, then open a new terminal window so that
 `cargo` is found. If `xcode-select` says the tools are already installed, that is fine.
+
+On Linux, install Rust and the libraries Deck builds against from your distribution instead,
+for example on Fedora: `sudo dnf install rust cargo gcc openssl-devel alsa-lib-devel`.
 
 ### 2. Create your own Spotify app
 
@@ -305,6 +274,19 @@ playing track shows in Control Center's Now Playing and on the lock screen. macO
 the media keys to the app that started playing most recently: if Spotify or Music plays
 after Deck, the keys go to it, and they come back when Deck plays again. For this, Deck
 starts a small helper process (`deck now-playing`) that quits with Deck.
+
+On Linux the same helper registers Deck as the MPRIS player "Deck", so media keys,
+`playerctl` and desktop widgets work. It also writes the playing track to
+`$XDG_RUNTIME_DIR/deck/state.json` for panels, and takes commands from the command line:
+
+- `deck ctl toggle|play|pause|next|previous|like` controls playback.
+- `deck ctl play-album <spotify:album:…>` opens an album and plays it.
+- `deck ctl search <query>` opens the search with the results.
+
+For desktop launchers, `deck search --json <query>` and `deck artist-albums --json <artist id>`
+print artists and albums as JSON without a running Deck (they need `client_id`).
+[Nightdrive](https://github.com/jarilehtinen/nightdrive) uses all of these for its top bar and
+launcher.
 
 ## Setting up Curated (optional, recommended)
 

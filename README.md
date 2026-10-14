@@ -332,7 +332,8 @@ deck curate
 
 It takes a few minutes. The progress is written to the terminal and to
 `~/.cache/deck/curate.log`. You can run it again any time to replace the list with a new
-one. When it is done, `✦ Curated` appears on Deck's home view.
+one. When it is done, the albums appear under `✦ Curated` on Deck's home view. Until
+then the row says *not set up*, and opening it shows these steps in short.
 
 ### 3. Make it run every week
 

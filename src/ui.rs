@@ -53,6 +53,17 @@ const ALBUM_REASON_LINES: usize = 3;
 /// After a stale list's subtitle: why the weekly update did not happen.
 const STALE_HINT: &str = " – see ~/.cache/deck/curate.log";
 
+/// The Curated view before there is a list: what Curated is and how to set it up.
+const CURATED_SETUP: &[&str] = &[
+    "Curated is a weekly list of 20 albums you have not heard yet, picked for your taste \
+     by Claude Code from your Last.fm history. Every album comes with a reason.",
+    "To set it up:",
+    "1. Add lastfm_api_key and lastfm_user to ~/.config/deck/config.toml and check them \
+     with: deck taste",
+    "2. Make the first list in a terminal (needs Claude Code): deck curate",
+    "3. To get a new list every week, see \"Setting up Curated\" in Deck's README.",
+];
+
 /// Accent colour: DECK, keys, progress bar, search field underline, the playing
 /// track's ♪, the liked ♥, the queue's + and the pause ■.
 const ACCENT: Color = Color::Rgb(0xD0, 0x7A, 0x10);
@@ -227,7 +238,16 @@ fn shelf(frame: &mut Frame, state: &State, selected: usize, scroll: &Scroll, are
     let mut rows: Vec<Line> = lists
         .iter()
         .map(|row| match row {
-            ShelfRow::Curated(list) => list_row(list, width),
+            ShelfRow::Curated(Some(list)) => list_row(list, width),
+            ShelfRow::Curated(None) => spread(
+                vec![format!("{LIST_MARK} Curated").into()],
+                vec![if state.curated_broken() {
+                    "file broken".fg(WARNING)
+                } else {
+                    "not set up".fg(MUTED)
+                }],
+                width,
+            ),
             ShelfRow::Genre(genre) => {
                 let right = if state.playing_genre() == Some(genre.id.as_str()) {
                     vec!["♪".fg(ACCENT), " playing".fg(MUTED)]
@@ -412,6 +432,26 @@ fn curated(frame: &mut Frame, state: &State, selected: usize, scroll: &Scroll, a
     let shown = state.curated();
     let name = shown.map_or("Curated", |list| list.name.as_str());
     frame.render_widget(name.bold(), title);
+    if shown.is_none() {
+        let text = if state.curated_broken() {
+            vec!["The list file cannot be read – see the error above.".to_owned()]
+        } else {
+            let width = usize::from(rows.width);
+            CURATED_SETUP
+                .iter()
+                .flat_map(|paragraph| {
+                    let mut lines = wrap(paragraph, width, usize::MAX);
+                    lines.push(String::new());
+                    lines
+                })
+                .collect()
+        };
+        frame.render_widget(
+            Paragraph::new(text.into_iter().map(Line::from).collect::<Vec<_>>()).fg(MUTED),
+            rows.union(reason),
+        );
+        return;
+    }
     let Some(current) = shown.filter(|list| !list.albums.is_empty()) else {
         frame.render_widget(
             hint("Nothing left – a new list arrives with the next weekly run"),
@@ -1230,7 +1270,8 @@ mod tests {
         let now = Instant::now();
         let mut state = State::new(shelf());
         state.update(Event::Key(Key::Down), now);
-        let buffer = render(&state, now, 60, 11);
+        state.update(Event::Key(Key::Down), now);
+        let buffer = render(&state, now, 60, 12);
 
         assert_eq!(
             rows(&buffer),
@@ -1239,6 +1280,7 @@ mod tests {
                 "—",
                 format!("●{}", "─".repeat(59)).as_str(),
                 "",
+                format!("✦ Curated{}not set up", " ".repeat(41)).as_str(),
                 format!("≋ Genres{}26 genres", " ".repeat(43)).as_str(),
                 "",
                 "Foo Fighters",
@@ -1253,11 +1295,13 @@ mod tests {
         assert!(buffer[(3, 0)].modifier.contains(Modifier::BOLD));
         // The selected row is highlighted across the full width with light text, the
         // others are not.
-        assert!(is_selected(&buffer, 0, 6));
-        assert!(is_selected(&buffer, 59, 6));
-        assert_eq!(buffer[(0, 6)].fg, SELECTED_FG);
-        // Genres is dim.
-        assert_eq!(buffer[(2, 4)].fg, MUTED);
+        assert!(is_selected(&buffer, 0, 7));
+        assert!(is_selected(&buffer, 59, 7));
+        assert_eq!(buffer[(0, 7)].fg, SELECTED_FG);
+        // Curated is not set up yet: "not set up" is dim. Genres is dim.
+        assert_eq!(buffer[(2, 4)].fg, Color::Reset);
+        assert_eq!(buffer[(55, 4)].fg, MUTED);
+        assert_eq!(buffer[(2, 5)].fg, MUTED);
         assert_eq!(buffer[(59, 4)].fg, MUTED);
         assert!(!is_selected(&buffer, 0, 4));
         assert_eq!(buffer[(0, 4)].bg, Color::Reset);
@@ -1267,16 +1311,16 @@ mod tests {
         assert_eq!(buffer[(1, 2)].fg, RULE);
         assert_eq!(buffer[(59, 2)].fg, RULE);
         // A dim full-width rule above the help row.
-        assert_eq!(buffer[(0, 9)].fg, RULE);
-        assert_eq!(buffer[(59, 9)].fg, RULE);
+        assert_eq!(buffer[(0, 10)].fg, RULE);
+        assert_eq!(buffer[(59, 10)].fg, RULE);
         // Help row: [key] in the accent colour and bold without a background, label dim.
         for x in [0, 1, 6] {
-            assert_eq!(buffer[(x, 10)].fg, ACCENT, "x {x}");
-            assert!(buffer[(x, 10)].modifier.contains(Modifier::BOLD), "x {x}");
-            assert_eq!(buffer[(x, 10)].bg, Color::Reset, "x {x}");
+            assert_eq!(buffer[(x, 11)].fg, ACCENT, "x {x}");
+            assert!(buffer[(x, 11)].modifier.contains(Modifier::BOLD), "x {x}");
+            assert_eq!(buffer[(x, 11)].bg, Color::Reset, "x {x}");
         }
-        assert_eq!(buffer[(8, 10)].fg, MUTED);
-        assert!(!buffer[(8, 10)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(8, 11)].fg, MUTED);
+        assert!(!buffer[(8, 11)].modifier.contains(Modifier::BOLD));
     }
 
     const NO_OTHER_REASON: &str = "Cosmic country-rock that Teenage Fanclub and The Posies \
@@ -1346,24 +1390,29 @@ mod tests {
     }
 
     #[test]
-    fn shelf_without_list_looks_as_before() {
+    fn shelf_without_list_shows_curated_row() {
         let now = Instant::now();
-        let before = render(&State::new(shelf()), now, 60, 10);
-        for list in [
-            None,
-            Some(
-                Curated {
-                    round: "2026-W41".to_owned(),
-                    created: String::new(),
-                    albums: Vec::new(),
-                }
-                .to_list(TEST_NOW),
-            ),
-        ] {
-            let state = State::new(shelf()).with_curated(Ok(list));
-            assert_eq!(render(&state, now, 60, 10), before);
+        let none = render(&State::new(shelf()), now, 60, 10);
+        assert_eq!(
+            row(&none, 4),
+            format!("✦ Curated{}not set up", " ".repeat(41))
+        );
+        // An emptied list keeps its subtitle.
+        let empty = Curated {
+            round: "2026-W41".to_owned(),
+            created: String::new(),
+            albums: Vec::new(),
         }
-        // Broken file: an error on the top row, the shelf otherwise unchanged.
+        .to_list(TEST_NOW);
+        let state = State::new(shelf()).with_curated(Ok(Some(empty)));
+        let buffer = render(&state, now, 60, 10);
+        assert_eq!(
+            row(&buffer, 4),
+            format!("✦ Curated{}0 albums · week 41", " ".repeat(33))
+        );
+        assert_eq!(rows(&buffer)[5..], rows(&none)[5..]);
+
+        // Broken file: an error on the top row and the row says so in the warning colour.
         let state = State::new(shelf()).with_curated(Err(
             "curated list file ~/.config/deck/curated.json is broken".into(),
         ));
@@ -1373,7 +1422,38 @@ mod tests {
             "curated list file ~/.config/deck/curated.json is broken"
         );
         assert_eq!(buffer[(0, 1)].fg, Color::Red);
-        assert_eq!(rows(&buffer)[3..], rows(&before)[3..]);
+        assert_eq!(
+            row(&buffer, 4),
+            format!("✦ Curated{}file broken", " ".repeat(40))
+        );
+        assert_eq!(buffer[(55, 4)].fg, WARNING);
+        assert_eq!(rows(&buffer)[5..], rows(&none)[5..]);
+    }
+
+    #[test]
+    fn curated_view_without_list_shows_setup_instructions() {
+        let now = Instant::now();
+        let mut state = State::new(shelf());
+        state.update(Event::Key(Key::Enter), now);
+        let guide = rows(&render(&state, now, 70, 24));
+        assert_eq!(guide[4], "Curated");
+        assert!(
+            guide[7].starts_with("Curated is a weekly list"),
+            "{guide:?}"
+        );
+        assert!(
+            guide.iter().any(|row| row.contains("deck curate")),
+            "{guide:?}"
+        );
+
+        // Broken file: no instructions, the error explains.
+        let mut state = State::new(shelf()).with_curated(Err("broken".into()));
+        state.update(Event::Key(Key::Enter), now);
+        let buffer = render(&state, now, 70, 24);
+        assert_eq!(
+            row(&buffer, 7),
+            "The list file cannot be read – see the error above."
+        );
     }
 
     #[test]
@@ -1546,10 +1626,11 @@ mod tests {
     #[test]
     fn empty_shelf_shows_hint() {
         let now = Instant::now();
-        let buffer = render(&State::new(Vec::new()), now, 60, 10);
-        assert!(row(&buffer, 4).starts_with("≋ Genres"));
+        let buffer = render(&State::new(Vec::new()), now, 60, 11);
+        assert!(row(&buffer, 4).starts_with("✦ Curated"));
+        assert!(row(&buffer, 5).starts_with("≋ Genres"));
         assert_eq!(
-            row(&buffer, 6),
+            row(&buffer, 7),
             "The shelf is empty – search for albums with Ctrl+F"
         );
     }
@@ -1558,7 +1639,7 @@ mod tests {
     fn artist_view_from_shelf_lists_albums_oldest_first() {
         let now = Instant::now();
         let mut state = State::new(shelf());
-        for key in [Key::Down, Key::Down, Key::Enter] {
+        for key in [Key::Down, Key::Down, Key::Down, Key::Enter] {
             state.update(Event::Key(key), now);
         }
         let buffer = render(&state, now, 70, 9);
@@ -1752,12 +1833,13 @@ mod tests {
         // Shelf.
         let mut state = State::new(many.clone());
         let buffer = render(&state, now, 60, 13);
-        assert_eq!(row(&buffer, 9), "Artist 04");
+        assert_eq!(row(&buffer, 9), "Artist 03");
         assert_eq!(row(&buffer, 10), "");
         assert_rule(&buffer, 11);
         assert!(row(&buffer, 12).starts_with("[Space] pause"));
 
         // Track list.
+        state.update(Event::Key(Key::Down), now);
         state.update(Event::Key(Key::Down), now);
         state.update(Event::Key(Key::Enter), now);
         state.update(Event::Key(Key::Enter), now);
@@ -1936,8 +2018,9 @@ mod tests {
             rows[top + 2],
             format!("{margin}●{}", "─".repeat(usize::from(MAX_WIDTH) - 1))
         );
-        assert!(rows[top + 4].starts_with(&format!("{margin}≋ Genres")));
-        assert_eq!(rows[top + 6], format!("{margin}Foo Fighters"));
+        assert!(rows[top + 4].starts_with(&format!("{margin}✦ Curated")));
+        assert!(rows[top + 5].starts_with(&format!("{margin}≋ Genres")));
+        assert_eq!(rows[top + 7], format!("{margin}Foo Fighters"));
         assert!(rows[bottom].starts_with(&format!("{margin}[Space] pause")));
         // The selected row's highlight reaches the edges of Deck's area but not beyond.
         let right = left + MAX_WIDTH - 1;
@@ -1987,7 +2070,14 @@ mod tests {
     /// Shelf › Nirvana › Nevermind: Enter opens the album's tracks without playing it.
     fn nevermind_state(now: Instant) -> State {
         let mut state = State::new(shelf());
-        for key in [Key::Down, Key::Down, Key::Enter, Key::Down, Key::Enter] {
+        for key in [
+            Key::Down,
+            Key::Down,
+            Key::Down,
+            Key::Enter,
+            Key::Down,
+            Key::Enter,
+        ] {
             state.update(Event::Key(key), now);
         }
         state
@@ -2498,6 +2588,7 @@ mod tests {
         let mut state =
             State::new(vec![night_drive()]).with_favorites(vec!["lofi".into(), "synthwave".into()]);
         state.update(Event::Key(Key::Down), now);
+        state.update(Event::Key(Key::Down), now);
         let actions = state.update(Event::Key(Key::Enter), now);
         let [Action::LoadRadio(request)] = actions.as_slice() else {
             panic!("odotettiin radiohakua, oli {actions:?}");
@@ -2534,11 +2625,12 @@ mod tests {
         let now = Instant::now();
         let mut state = synthwave_radio(now);
         state.update(Event::Key(Key::Esc), now);
-        let buffer = render(&state, now, 70, 12);
+        let buffer = render(&state, now, 70, 13);
         assert_eq!(
             rows(&buffer)[3..],
             [
                 "",
+                format!("✦ Curated{}not set up", " ".repeat(51)).as_str(),
                 format!("≋ lofi{}radio", " ".repeat(59)).as_str(),
                 format!("≋ synthwave{}♪ playing", " ".repeat(50)).as_str(),
                 format!("≋ Genres{}26 genres", " ".repeat(53)).as_str(),
@@ -2550,14 +2642,14 @@ mod tests {
             ]
         );
         // Genre name normal, radio dimmed. On the playing row ♪ in the accent colour.
-        assert_eq!(buffer[(2, 4)].fg, Color::Reset);
-        assert_eq!(buffer[(65, 4)].fg, MUTED);
-        assert!(is_selected(&buffer, 0, 5));
-        assert_eq!(buffer[(61, 5)].fg, ACCENT);
-        assert_eq!(buffer[(63, 5)].fg, SELECTED_MUTED);
+        assert_eq!(buffer[(2, 5)].fg, Color::Reset);
+        assert_eq!(buffer[(65, 5)].fg, MUTED);
+        assert!(is_selected(&buffer, 0, 6));
+        assert_eq!(buffer[(61, 6)].fg, ACCENT);
+        assert_eq!(buffer[(63, 6)].fg, SELECTED_MUTED);
         // Genres dimmed.
-        assert_eq!(buffer[(2, 6)].fg, MUTED);
-        assert_eq!(buffer[(61, 6)].fg, MUTED);
+        assert_eq!(buffer[(2, 7)].fg, MUTED);
+        assert_eq!(buffer[(61, 7)].fg, MUTED);
     }
 
     #[test]
@@ -2565,7 +2657,7 @@ mod tests {
         let now = Instant::now();
         let mut state =
             State::new(Vec::new()).with_favorites(vec!["lofi".into(), "synthwave".into()]);
-        for key in [Key::Down, Key::Down, Key::Enter] {
+        for key in [Key::Down, Key::Down, Key::Down, Key::Enter] {
             state.update(Event::Key(key), now);
         }
         let buffer = render(&state, now, 70, 30);
@@ -2606,6 +2698,7 @@ mod tests {
     fn list_scrolls_only_past_the_visible_edge() {
         let now = Instant::now();
         let mut state = State::new(Vec::new());
+        state.update(Event::Key(Key::Down), now);
         state.update(Event::Key(Key::Enter), now);
         let names: Vec<&str> = genres::all().iter().map(|g| g.name.as_str()).collect();
         // Rows 7–14 are left for the list.
@@ -2979,6 +3072,9 @@ mod tests {
     fn shelf_help_shows_d_only_on_a_genre_row() {
         let now = Instant::now();
         let mut state = State::new(shelf()).with_favorites(vec!["lofi".into()]);
+        // On the Curated row, d does nothing.
+        assert!(!help_row(&state, now).contains("[d]"));
+        state.update(Event::Key(Key::Down), now);
         assert_eq!(
             help_row(&state, now),
             "[Space] pause  [←→] track  [d] remove from home  [f] search  [u] show queue  [q] quit"
@@ -3035,11 +3131,13 @@ mod tests {
         liked_playing_album(&mut state, now);
         rows.push(help_row(&state, now));
         state.update(Event::Key(Key::Down), now);
+        state.update(Event::Key(Key::Down), now);
         state.update(Event::Key(Key::Enter), now);
         rows.push(help_row(&state, now));
 
         // On the shelf with a home genre selected.
         let mut state = State::new(shelf()).with_favorites(vec!["lofi".into()]);
+        state.update(Event::Key(Key::Down), now);
         liked_playing_album(&mut state, now);
         rows.push(help_row(&state, now));
 
@@ -3094,6 +3192,7 @@ mod tests {
 
         // In the Genres view with lofi (on home) selected.
         let mut state = State::new(Vec::new()).with_favorites(vec!["lofi".into()]);
+        state.update(Event::Key(Key::Down), now);
         state.update(Event::Key(Key::Down), now);
         state.update(Event::Key(Key::Enter), now);
         let lofi = genres::all().iter().position(|g| g.id == "lofi").unwrap();

@@ -288,7 +288,8 @@ pub struct RadioView {
 /// A list row above the shelf.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ShelfRow<'a> {
-    Curated(&'a AlbumList),
+    /// `None`: there is no list yet (Curated is not set up) or its file is broken.
+    Curated(Option<&'a AlbumList>),
     Genre(&'static Genre),
     Genres,
 }
@@ -652,13 +653,17 @@ impl State {
             .as_deref()
     }
 
-    /// The list rows shown above the shelf: Curated (if it has albums), favourite genres
-    /// in alphabetical order, and always Genres last.
+    /// Whether the list file could not be read (the error is shown on the top row).
+    pub fn curated_broken(&self) -> bool {
+        self.lists_broken
+    }
+
+    /// The list rows shown above the shelf: always Curated first (without a list it opens
+    /// the setup instructions), favourite genres in alphabetical order, and always Genres
+    /// last.
     pub fn shelf_lists(&self) -> Vec<ShelfRow<'_>> {
-        self.curated
-            .iter()
-            .filter(|list| !list.albums.is_empty())
-            .map(ShelfRow::Curated)
+        [ShelfRow::Curated(self.curated.as_ref())]
+            .into_iter()
             .chain(self.favorite_genres().into_iter().map(ShelfRow::Genre))
             .chain([ShelfRow::Genres])
             .collect()
@@ -2505,10 +2510,12 @@ mod tests {
 
     impl App {
         /// Shelf with the selection on the first artist: the list group always has at least
-        /// the Genres row, where the selection starts.
+        /// the Curated and Genres rows, and the selection starts on the top one.
         fn new(shelf: Vec<Album>) -> Self {
             let mut app = Self::at_top(shelf);
-            app.key(Down);
+            for _ in 0..app.state.shelf_lists().len() {
+                app.key(Down);
+            }
             app
         }
 
@@ -2626,7 +2633,10 @@ mod tests {
         let app = App::at_top(shelf_app().state.shelf);
         assert!(app.is_shelf());
         assert_eq!(app.shelf_selected(), 0);
-        assert_eq!(app.state.shelf_lists(), [ShelfRow::Genres]);
+        assert_eq!(
+            app.state.shelf_lists(),
+            [ShelfRow::Curated(None), ShelfRow::Genres]
+        );
         assert_eq!(
             names(app.state.shelf_artists()),
             ["Foo Fighters", "Nirvana", "Radiohead"]
@@ -2640,11 +2650,11 @@ mod tests {
         let mut app = App::at_top(shelf_app().state.shelf);
         assert!(app.key(Up).is_empty());
         assert_eq!(app.shelf_selected(), 0);
-        // Genres and three artists.
-        app.keys(&[Down, Down, Down, Down]);
-        assert_eq!(app.shelf_selected(), 3);
+        // Curated, Genres and three artists.
+        app.keys(&[Down, Down, Down, Down, Down]);
+        assert_eq!(app.shelf_selected(), 4);
         app.key(Up);
-        assert_eq!(app.shelf_selected(), 2);
+        assert_eq!(app.shelf_selected(), 3);
     }
 
     #[test]
@@ -2653,12 +2663,12 @@ mod tests {
         assert!(app.state.shelf_artists().is_empty());
         assert!(app.keys(&[Up, Down, Ctrl('d'), Ctrl('a'), Esc]).is_empty());
         assert!(app.is_shelf());
-        assert_eq!(app.shelf_selected(), 0);
+        assert_eq!(app.shelf_selected(), 1);
 
         app.key(Ctrl('f'));
         app.search_view();
 
-        // The only row is Genres.
+        // The rows are Curated and Genres; the selection is on Genres.
         app.key(Esc);
         assert!(app.key(Enter).is_empty());
         assert!(matches!(app.state.view(), View::Genres { selected: 0, .. }));
@@ -2682,10 +2692,10 @@ mod tests {
         app.keys(&[Down, Down, Enter]);
         // The shelf comes into view: the lists are reread.
         assert_eq!(app.key(Esc), [Action::LoadLists]);
-        assert_eq!(app.shelf_selected(), 3);
+        assert_eq!(app.shelf_selected(), 4);
         // The shelf is at the bottom: Esc goes nowhere.
         app.key(Esc);
-        assert_eq!(app.shelf_selected(), 3);
+        assert_eq!(app.shelf_selected(), 4);
     }
 
     // --- Lists on the shelf and the Curated list ---
@@ -2752,7 +2762,7 @@ mod tests {
         let lists = app.state.shelf_lists();
         assert_eq!(lists.len(), 2);
         assert!(
-            matches!(&lists[0], ShelfRow::Curated(list) if list.subtitle == "3 albums · week 41")
+            matches!(&lists[0], ShelfRow::Curated(Some(list)) if list.subtitle == "3 albums · week 41")
         );
         assert_eq!(lists[1], ShelfRow::Genres);
         assert_eq!(app.shelf_selected(), 0);
@@ -2780,38 +2790,61 @@ mod tests {
     }
 
     #[test]
-    fn without_list_shelf_is_as_before() {
+    fn without_list_curated_row_stays_on_shelf() {
         for list in [None, Some(curated(&[]))] {
             let mut app = shelf_app();
-            app.state = State::new(app.state.shelf.clone()).with_curated(Ok(list));
-            assert_eq!(app.state.shelf_lists(), [ShelfRow::Genres]);
-            app.keys(&[Down, Down, Down]);
-            assert_eq!(app.shelf_selected(), 3);
+            app.state = State::new(app.state.shelf.clone()).with_curated(Ok(list.clone()));
+            assert_eq!(
+                app.state.shelf_lists(),
+                [ShelfRow::Curated(list.as_ref()), ShelfRow::Genres]
+            );
+            app.keys(&[Down, Down, Down, Down]);
+            assert_eq!(app.shelf_selected(), 4);
             app.key(Enter);
             assert_eq!(app.artist_view().artist, artist("Radiohead"));
         }
     }
 
     #[test]
+    fn curated_row_without_list_opens_empty_view() {
+        let mut app = App::at_top(shelf_app().state.shelf);
+        assert_eq!(app.key(Enter), [Action::LoadLists]);
+        assert_eq!(curated_selected(&app), 0);
+        assert_eq!(app.state.curated(), None);
+        // There are no albums: the keys do nothing.
+        assert!(
+            app.keys(&[Up, Down, Enter, Ctrl('e'), Ctrl('a'), Ctrl('d')])
+                .is_empty()
+        );
+        assert_eq!(curated_selected(&app), 0);
+        assert_eq!(app.key(Esc), [Action::LoadLists]);
+        assert_eq!(app.shelf_selected(), 0);
+    }
+
+    #[test]
     fn list_appearing_or_disappearing_keeps_selected_artist() {
         let mut app = shelf_app();
         app.keys(&[Down, Down]);
-        app.send(Event::ListsLoaded(Ok(Some(three_curated()))));
         assert_eq!(app.shelf_selected(), 4);
         app.send(Event::ListsLoaded(Ok(Some(three_curated()))));
         assert_eq!(app.shelf_selected(), 4);
         app.send(Event::ListsLoaded(Ok(None)));
-        assert_eq!(app.shelf_selected(), 3);
+        assert_eq!(app.shelf_selected(), 4);
+        app.key(Enter);
+        assert_eq!(app.artist_view().artist, artist("Radiohead"));
 
-        // Selection on the Curated row: when it goes, the next row, Genres, is selected.
+        // Selection on the Curated row: it stays there when the list empties.
         let mut app = curated_app();
         app.send(Event::ListsLoaded(Ok(Some(curated(&[])))));
         assert_eq!(app.shelf_selected(), 0);
-        assert_eq!(app.state.shelf_lists(), [ShelfRow::Genres]);
+        assert!(matches!(
+            app.state.shelf_lists()[0],
+            ShelfRow::Curated(Some(list)) if list.albums.is_empty()
+        ));
     }
 
     #[test]
-    fn broken_list_file_shows_error_and_hides_list_row() {
+    fn broken_list_file_shows_error_and_keeps_list_row_without_list() {
         let mut app = curated_app();
         app.send(Event::ListsLoaded(
             Err("curated list file is broken".into()),
@@ -2820,13 +2853,21 @@ mod tests {
             app.state.error.as_deref(),
             Some("curated list file is broken")
         );
-        assert_eq!(app.state.shelf_lists(), [ShelfRow::Genres]);
+        assert_eq!(
+            app.state.shelf_lists(),
+            [ShelfRow::Curated(None), ShelfRow::Genres]
+        );
         assert_eq!(app.state.curated(), None);
+        assert!(app.state.curated_broken());
 
-        // Fixed file: the error goes away and the row comes back.
+        // Fixed file: the error goes away and the list comes back.
         app.send(Event::ListsLoaded(Ok(Some(three_curated()))));
         assert_eq!(app.state.error, None);
-        assert_eq!(app.state.shelf_lists().len(), 2);
+        assert!(!app.state.curated_broken());
+        assert!(matches!(
+            app.state.shelf_lists()[0],
+            ShelfRow::Curated(Some(_))
+        ));
 
         // A successful load does not clear an unrelated error.
         app.send(Event::Error("the shelf is read-only".into()));
@@ -2885,9 +2926,9 @@ mod tests {
                 .is_empty()
         );
 
-        // The shelf no longer has a Curated row: the selection is on the Genres row.
+        // The empty list's Curated row stays on the shelf, and so does the selection.
         assert_eq!(app.key(Esc), [Action::LoadLists]);
-        assert_eq!(app.state.shelf_lists(), [ShelfRow::Genres]);
+        assert_eq!(app.state.shelf_lists().len(), 2);
         assert_eq!(app.shelf_selected(), 0);
     }
 
@@ -2990,7 +3031,7 @@ mod tests {
             names(app.state.shelf_artists()),
             ["Foo Fighters", "Nirvana"]
         );
-        assert_eq!(app.shelf_selected(), 2);
+        assert_eq!(app.shelf_selected(), 3);
     }
 
     #[test]
@@ -3000,7 +3041,8 @@ mod tests {
         app.key(Ctrl('d'));
         app.send(Event::ShelfChanged(vec![]));
         assert!(app.is_shelf());
-        assert_eq!(app.shelf_selected(), 0);
+        // The selection is on the last row, Genres.
+        assert_eq!(app.shelf_selected(), 1);
         assert!(app.state.shelf_artists().is_empty());
     }
 
@@ -3034,7 +3076,7 @@ mod tests {
         assert_eq!(search.query, "");
         assert_eq!(search.results, None);
         app.key(Esc);
-        assert_eq!(app.shelf_selected(), 2);
+        assert_eq!(app.shelf_selected(), 3);
     }
 
     #[test]
@@ -3815,7 +3857,7 @@ mod tests {
         assert_eq!(view.artist, artist("Nirvana"));
         assert_eq!(view.selected, 1);
         app.key(Esc);
-        assert_eq!(app.shelf_selected(), 2);
+        assert_eq!(app.shelf_selected(), 3);
     }
 
     #[test]
@@ -4673,11 +4715,12 @@ mod tests {
         genres::find("synthwave").unwrap()
     }
 
-    /// Shelf and favourite genres; the selection on the top list row.
+    /// Shelf and favourite genres; the selection on the first row below Curated.
     fn genre_app(favorites: &[&str]) -> App {
         let mut app = App::at_top(shelf_app().state.shelf);
         app.state = State::new(app.state.shelf.clone())
             .with_favorites(favorites.iter().map(|id| id.to_string()).collect());
+        app.key(Down);
         app
     }
 
@@ -4759,6 +4802,7 @@ mod tests {
         assert_eq!(
             app.state.shelf_lists(),
             [
+                ShelfRow::Curated(None),
                 ShelfRow::Genre(lofi()),
                 ShelfRow::Genre(synthwave()),
                 ShelfRow::Genres
@@ -4816,7 +4860,7 @@ mod tests {
         app.state.views.truncate(1);
         app.state.favorites = vec!["lofi".into()];
         if let Some(View::Shelf { selected, .. }) = app.state.views.last_mut() {
-            *selected = 0;
+            *selected = 1;
         }
         let request = radio_request(&app.key(Enter));
         let actions = app.send(Event::RadioLoaded {
@@ -4854,20 +4898,22 @@ mod tests {
         assert_eq!(app.key(Ctrl('d')), [Action::RemoveFavorite("lofi".into())]);
         app.send(Event::FavoritesChanged(vec!["synthwave".into()]));
         // The selection stays at the same position: the next row.
-        assert_eq!(app.shelf_selected(), 0);
-        assert_eq!(app.state.shelf_lists()[0], ShelfRow::Genre(synthwave()));
-        // Ctrl+D on the Genres row or on an artist does not remove a genre.
+        assert_eq!(app.shelf_selected(), 1);
+        assert_eq!(app.state.shelf_lists()[1], ShelfRow::Genre(synthwave()));
+        // Ctrl+D on the Genres row, the Curated row or an artist does not remove a genre.
         app.key(Down);
+        assert!(app.key(Ctrl('d')).is_empty());
+        app.keys(&[Up, Up]);
         assert!(app.key(Ctrl('d')).is_empty());
 
         // A selection on an artist stays on the artist when more genre rows appear.
-        app.keys(&[Down, Down]);
-        assert_eq!(app.shelf_selected(), 3);
+        app.keys(&[Down, Down, Down, Down]);
+        assert_eq!(app.shelf_selected(), 4);
         app.send(Event::FavoritesChanged(vec![
             "lofi".into(),
             "synthwave".into(),
         ]));
-        assert_eq!(app.shelf_selected(), 4);
+        assert_eq!(app.shelf_selected(), 5);
         app.key(Enter);
         assert_eq!(app.artist_view().artist, artist("Nirvana"));
     }
@@ -4875,7 +4921,10 @@ mod tests {
     #[test]
     fn more_genres_lists_catalog_and_ctrl_a_adds_synthwave_to_home() {
         let mut app = genre_app(&[]);
-        assert_eq!(app.state.shelf_lists(), [ShelfRow::Genres]);
+        assert_eq!(
+            app.state.shelf_lists(),
+            [ShelfRow::Curated(None), ShelfRow::Genres]
+        );
         assert!(app.key(Enter).is_empty());
         assert!(matches!(app.state.view(), View::Genres { selected: 0, .. }));
 
@@ -4901,7 +4950,11 @@ mod tests {
         assert_eq!(app.key(Esc), [Action::LoadLists]);
         assert_eq!(
             app.state.shelf_lists(),
-            [ShelfRow::Genre(synthwave()), ShelfRow::Genres]
+            [
+                ShelfRow::Curated(None),
+                ShelfRow::Genre(synthwave()),
+                ShelfRow::Genres
+            ]
         );
     }
 

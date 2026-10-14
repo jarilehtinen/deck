@@ -341,7 +341,8 @@ mod linux {
 
         // `deck ctl` commands.
         let _ = std::fs::remove_file(socket_path());
-        let listener = UnixListener::bind(socket_path()).context("cannot open the control socket")?;
+        let listener =
+            UnixListener::bind(socket_path()).context("cannot open the control socket")?;
         let socket_send = send.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {

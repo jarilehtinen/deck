@@ -222,7 +222,10 @@ async fn run_mode(mode: Mode) -> Result<()> {
         Mode::ArtistAlbumsJson(artist_id) => {
             init_stderr_logging();
             let catalog = Catalog::connect_stored(&Config::load()?).await?;
-            println!("{}", serde_json::to_string(&catalog.artist_albums(&artist_id).await?)?);
+            println!(
+                "{}",
+                serde_json::to_string(&catalog.artist_albums(&artist_id).await?)?
+            );
             Ok(())
         }
         Mode::Curate => {
@@ -713,10 +716,8 @@ mod tests {
     fn curated_file_shows_on_shelf_and_ctrl_d_rejects_into_files() {
         let dir = tempfile::tempdir().unwrap();
         // A fresh list: the shelf row shows no age.
-        let curated = CURATED_JSON.replace(
-            "2026-10-05T07:00:00+03:00",
-            &Timestamp::now().to_string(),
-        );
+        let curated =
+            CURATED_JSON.replace("2026-10-05T07:00:00+03:00", &Timestamp::now().to_string());
         std::fs::write(dir.path().join("curated.json"), curated).unwrap();
         std::fs::write(dir.path().join("curated-history.json"), HISTORY_JSON).unwrap();
         let files = CuratedFiles::in_dir(dir.path());
@@ -885,20 +886,28 @@ mod tests {
         assert_eq!(mode(&["now-playing"]), Some(Mode::NowPlaying));
         assert_eq!(
             mode(&["ctl", "like"]),
-            Some(Mode::Ctl(now_playing::Control::Media(now_playing::Command::ToggleLike)))
+            Some(Mode::Ctl(now_playing::Control::Media(
+                now_playing::Command::ToggleLike
+            )))
         );
         assert_eq!(
             mode(&["ctl", "next"]),
-            Some(Mode::Ctl(now_playing::Control::Media(now_playing::Command::Next)))
+            Some(Mode::Ctl(now_playing::Control::Media(
+                now_playing::Command::Next
+            )))
         );
         assert_eq!(
             mode(&["ctl", "play-album", "spotify:album:abc"]),
-            Some(Mode::Ctl(now_playing::Control::PlayAlbum("spotify:album:abc".to_owned())))
+            Some(Mode::Ctl(now_playing::Control::PlayAlbum(
+                "spotify:album:abc".to_owned()
+            )))
         );
         assert_eq!(mode(&["ctl", "play-album", "spotify:track:abc"]), None);
         assert_eq!(
             mode(&["ctl", "search", "fm-84", "atlas"]),
-            Some(Mode::Ctl(now_playing::Control::Search("fm-84 atlas".to_owned())))
+            Some(Mode::Ctl(now_playing::Control::Search(
+                "fm-84 atlas".to_owned()
+            )))
         );
         assert_eq!(mode(&["ctl"]), None);
         assert_eq!(mode(&["ctl", "dance"]), None);

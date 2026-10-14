@@ -973,7 +973,8 @@ impl State {
             position_ms: millis(playing.elapsed(now)),
             playing: !playing.paused,
             cover: playing.cover.clone(),
-            liked: (self.likes.enabled && !playing.uri.is_empty()).then(|| self.liked(&playing.uri)),
+            liked: (self.likes.enabled && !playing.uri.is_empty())
+                .then(|| self.liked(&playing.uri)),
         })
     }
 

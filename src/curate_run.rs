@@ -119,7 +119,9 @@ fn allowed_tools(work: &Path) -> Vec<String> {
     vec![
         "Bash(deck taste)".to_owned(),
         "Bash(deck curate submit:*)".to_owned(),
-        "Write(./**)".to_owned(),
+        // Claude Code matches Write against Edit rules: a `Write(...)` rule is ignored
+        // and every Write is denied in dontAsk mode.
+        "Edit(./**)".to_owned(),
         "Read(./**)".to_owned(),
         // Claude Code saves long tool output (deck taste) in the working directory's
         // project folder. Read may read only from there, not other projects'
@@ -414,6 +416,7 @@ mod tests {
         let tools = allowed_tools(Path::new("/w"));
         assert!(tools.contains(&"Bash(deck curate submit:*)".to_owned()));
         assert!(!tools.iter().any(|t| t == "Bash(deck curate:*)"));
+        assert!(tools.contains(&"Edit(./**)".to_owned()));
     }
 
     #[test]

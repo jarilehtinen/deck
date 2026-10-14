@@ -712,7 +712,12 @@ mod tests {
     #[test]
     fn curated_file_shows_on_shelf_and_ctrl_d_rejects_into_files() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("curated.json"), CURATED_JSON).unwrap();
+        // A fresh list: the shelf row shows no age.
+        let curated = CURATED_JSON.replace(
+            "2026-10-05T07:00:00+03:00",
+            &Timestamp::now().to_string(),
+        );
+        std::fs::write(dir.path().join("curated.json"), curated).unwrap();
         std::fs::write(dir.path().join("curated-history.json"), HISTORY_JSON).unwrap();
         let files = CuratedFiles::in_dir(dir.path());
         let now = Instant::now();

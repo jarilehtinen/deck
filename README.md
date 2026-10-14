@@ -285,6 +285,8 @@ On Linux the same helper registers Deck as the MPRIS player "Deck", so media key
 
 For desktop launchers, `deck search --json <query>` and `deck artist-albums --json <artist id>`
 print artists and albums as JSON without a running Deck (they need `client_id`).
+Deck's app icon for desktop launchers is `assets/deck.svg`: install it as
+`~/.local/share/icons/hicolor/scalable/apps/deck.svg` and use `Icon=deck` in a `.desktop` file.
 [Nightdrive](https://github.com/jarilehtinen/nightdrive) uses all of these for its top bar and
 launcher.
 
